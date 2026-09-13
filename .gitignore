@@ -1,0 +1,19 @@
+# datasets & archives
+data/
+RealSR/
+RealSR(V3).tar.gz
+
+# training artifacts
+experiments/**/*.pt
+experiments/**/*.pth
+experiments/**/*.png
+experiments/**/*.log
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# worktrees
+.worktrees/
