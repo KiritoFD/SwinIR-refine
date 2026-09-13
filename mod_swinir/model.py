@@ -17,38 +17,30 @@ from .layers import (
 
 
 class LocalKernelHead(nn.Module):
-    """
-    LP-KPN-style spatially-varying local kernel (Cai et al., RealSR ICCV'19).
+    """LP-KPN: LR-feat → PixelShuffle softmax k×k kernels on bicubic neighborhood."""
 
-    Real optical PSF is not shift-invariant. Instead of a fixed bicubic base,
-    predict a softmax-normalized k×k blending kernel at every HR pixel and
-    recombine the local neighborhood of the upsampled LR:
-
-        Y(p) = Σ_{q∈N_k(p)}  w(p,q) · X↑(q),   w(p,·) = softmax(Φ(feat)_p)
-
-    Identity init: center tap dominant → Y ≈ bicubic at step 0.
-    """
-
-    def __init__(self, feat_ch, k=5):
+    def __init__(self, feat_ch, k=5, upscale=2):
         super().__init__()
         assert k % 2 == 1
         self.k = k
-        self.pred = nn.Conv2d(feat_ch, k * k, 3, 1, 1)
+        self.upscale = upscale
+        self.pred = nn.Conv2d(feat_ch, k * k * upscale * upscale, 3, 1, 1)
         nn.init.zeros_(self.pred.weight)
         nn.init.zeros_(self.pred.bias)
         center = (k // 2) * k + (k // 2)
         with torch.no_grad():
-            self.pred.bias[center] = 8.0  # softmax → near one-hot center
+            for i in range(upscale * upscale):
+                self.pred.bias[center * upscale * upscale + i] = 8.0
 
-    def forward(self, feat, img):
-        """feat: B,Cf,H,W  img: B,C,H,W (same H,W) → B,C,H,W"""
-        B, C, H, W = img.shape
-        k = self.k
+    def forward(self, feat_lr, img_up):
+        """feat_lr: B,Cf,H,W (LR). img_up: B,C,H*s,W*s."""
+        B, C, Hs, Ws = img_up.shape
+        s, k = self.upscale, self.k
         pad = k // 2
-        img_pad = F.pad(img, (pad, pad, pad, pad), mode="reflect")
-        patches = F.unfold(img_pad, kernel_size=k, stride=1)  # B, C*k*k, H*W
-        patches = patches.view(B, C, k * k, H, W)
-        w = torch.softmax(self.pred(feat), dim=1)  # B, k*k, H, W
+        w = F.pixel_shuffle(self.pred(feat_lr), s)
+        w = torch.softmax(w, dim=1)
+        img_pad = F.pad(img_up, (pad, pad, pad, pad), mode="reflect")
+        patches = F.unfold(img_pad, kernel_size=k, stride=1).view(B, C, k * k, Hs, Ws)
         return (patches * w.unsqueeze(1)).sum(dim=2)
 
 
@@ -146,7 +138,7 @@ class ModSwinIR(nn.Module):
         nn.init.zeros_(self.conv_last.bias)
 
         # local kernel base (replaces pure bicubic when enabled)
-        self.kpn = LocalKernelHead(embed_dim, k=kpn_size) if use_kpn else None
+        self.kpn = LocalKernelHead(embed_dim, k=kpn_size, upscale=upscale) if use_kpn else None
 
         self.unc_head = (
             nn.Sequential(
@@ -245,20 +237,11 @@ class ModSwinIR(nn.Module):
 
         base = F.interpolate(x, scale_factor=self.upscale, mode="bicubic", align_corners=False)
         if self.kpn is not None:
-            # residual gate: α = softmax-kernel blend in [0,1]-ish; apply only on residual
-            # ŷ = bicubic + α ⊙ f_θ   (KPN cannot destroy the identity path)
-            alpha = self.kpn(x_up, torch.ones_like(base))  # B,3,H,W ≈ local weighted ones
-            # normalize to ~[0,2] soft gate via mean-preserving: use channel-mean of kernel output
-            # ones through softmax kernel stay ~1; keep as multiplicative gate on residual
-            sr_gate = alpha.mean(dim=1, keepdim=True)  # B,1,H,W ≈ 1 at init
-        else:
-            sr_gate = None
+            # true LP-KPN: space-varying filter of bicubic neighborhood from LR feats
+            base = self.kpn(fea, base)
 
         if self.residual_recon:
-            if sr_gate is not None:
-                sr = base + res * sr_gate
-            else:
-                sr = base + res
+            sr = base + res
         else:
             sr = res + mean
 
