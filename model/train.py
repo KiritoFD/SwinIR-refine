@@ -197,6 +197,8 @@ def main():
         for g in optim.param_groups:
             g["lr"] = cur_lr
 
+        accum = max(1, int(getattr(args, "grad_accum", 1)))
+        is_accum_step = ((step + 1) % accum == 0) or (step == args.steps - 1)
         with torch.amp.autocast("cuda", enabled=args.amp, dtype=torch.float16):
             sr, _ = model(lr)
         sr = sr.float()
@@ -207,28 +209,29 @@ def main():
             parts = {"l1": total, "plain": total}
 
         if torch.isfinite(total):
-            scaler.scale(total).backward()
-            if isinstance(optim, CompositeOptimizer):
-                for sub in optim.optimizers:
-                    scaler.unscale_(sub)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                for sub in optim.optimizers:
-                    scaler.step(sub)
-                scaler.update()
-            else:
-                scaler.unscale_(optim)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optim)
-                scaler.update()
-            optim.zero_grad(set_to_none=True)
-            ema_update()
+            scaler.scale(total / accum).backward()
+            if is_accum_step:
+                if isinstance(optim, CompositeOptimizer):
+                    for sub in optim.optimizers:
+                        scaler.unscale_(sub)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    for sub in optim.optimizers:
+                        scaler.step(sub)
+                    scaler.update()
+                else:
+                    scaler.unscale_(optim)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optim)
+                    scaler.update()
+                optim.zero_grad(set_to_none=True)
+                ema_update()
         else:
             optim.zero_grad(set_to_none=True)
 
         if step % 25 == 0 or step == args.steps - 1:
             mem = torch.cuda.max_memory_allocated(device) / 1024**3 if device.type == "cuda" else 0
             print(
-                f"step {step:05d}/{args.steps} | L {float(total):.4f} "
+                f"step {step:05d}/{args.steps} | L {float(total.detach()):.4f} "
                 f"(l1 {float(parts.get('l1',0)):.4f} aln {float(parts.get('l1_aln',0)):.4f}) "
                 f"| lr {cur_lr:.2e} | {mem:.2f}GB | {time.time()-t0:.0f}s",
                 flush=True,

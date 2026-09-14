@@ -72,19 +72,16 @@ class RealSRPairDataset(Dataset):
         ps = self.lr_patch
 
         with Image.open(lr_path) as li, Image.open(hr_path) as hi:
-            li = li.convert("RGB")
-            hi = hi.convert("RGB")
+            # Do not convert the full HR (can be ~2k+); convert only crops.
             lw, lh = li.size
             hw, hh = hi.size
-            # usable LR region given HR size
             max_lw, max_lh = hw // scale, hh // scale
             lw, lh = min(lw, max_lw), min(lh, max_lh)
             if lw < ps or lh < ps:
-                # fall back: load small crops padded later via expand
                 box_lr = (0, 0, lw, lh)
                 box_hr = (0, 0, lw * scale, lh * scale)
-                lr = np.asarray(li.crop(box_lr), dtype=np.uint8)
-                hr = np.asarray(hi.crop(box_hr), dtype=np.uint8)
+                lr = np.asarray(li.crop(box_lr).convert("RGB"), dtype=np.uint8)
+                hr = np.asarray(hi.crop(box_hr).convert("RGB"), dtype=np.uint8)
                 pad_h = max(0, ps - lr.shape[0])
                 pad_w = max(0, ps - lr.shape[1])
                 lr = np.pad(lr, ((0, pad_h), (0, pad_w), (0, 0)), mode="reflect")
@@ -102,8 +99,9 @@ class RealSRPairDataset(Dataset):
                 else:
                     top = max(0, (lh - ps) // 2)
                     left = max(0, (lw - ps) // 2)
-                # PIL crop: (left, top, right, bottom)
-                lr = np.asarray(li.crop((left, top, left + ps, top + ps)), dtype=np.uint8)
+                lr = np.asarray(
+                    li.crop((left, top, left + ps, top + ps)).convert("RGB"), dtype=np.uint8
+                )
                 hr = np.asarray(
                     hi.crop(
                         (
@@ -112,7 +110,7 @@ class RealSRPairDataset(Dataset):
                             (left + ps) * scale,
                             (top + ps) * scale,
                         )
-                    ),
+                    ).convert("RGB"),
                     dtype=np.uint8,
                 )
 
