@@ -55,6 +55,12 @@ def parse_args():
     p.add_argument("--w-amp", type=float, default=0.05, help="patch-wise amplitude loss weight")
     p.add_argument("--w-hf-conf", type=float, default=0.25, help="confidence-weighted HF loss weight")
     p.add_argument("--align-loss", action="store_true", help="offset-aligned L1 (mimicked alignment)")
+    p.add_argument("--no-kpn", action="store_true", help="disable LP-KPN head")
+    p.add_argument("--no-wiener", action="store_true", help="disable Wiener band head")
+    p.add_argument("--use-kpn", action="store_true")
+    p.add_argument("--use-wiener", action="store_true")
+    p.add_argument("--use-ampphase", action="store_true")
+    p.add_argument("--use-radialpsf", action="store_true")
     p.add_argument("--max-shift", type=float, default=3.0)
     p.add_argument("--w-pure", type=float, default=0.25)
     p.add_argument("--w-off", type=float, default=0.01)
@@ -85,7 +91,21 @@ def lr_at(step, base, warmup, total):
 def build_any(args):
     n_params = 0
     if args.arch == "mod":
-        model = build_model(upscale=args.scale, size=args.model_size)
+        kw = {}
+        # explicit enable flags (defaults off for optional heads)
+        if args.use_kpn and not args.no_kpn:
+            kw["use_kpn"] = True
+        if args.use_wiener and not args.no_wiener:
+            kw["use_wiener"] = True
+        if args.use_ampphase:
+            kw["use_ampphase"] = True
+        if args.use_radialpsf:
+            kw["use_radialpsf"] = True
+        if args.no_kpn:
+            kw["use_kpn"] = False
+        if args.no_wiener:
+            kw["use_wiener"] = False
+        model = build_model(upscale=args.scale, size=args.model_size, **kw)
         tag = f"ModSwinIR-{args.model_size}"
     else:
         from .swinir_baseline import SwinIRTrainWrapper, build_swinir

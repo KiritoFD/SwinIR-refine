@@ -44,6 +44,127 @@ class LocalKernelHead(nn.Module):
         return (patches * w.unsqueeze(1)).sum(dim=2)
 
 
+class AmpPhaseHead(nn.Module):
+    """
+    Image-level amplitude/phase split on residual (inference).
+
+    FFT(res) → amplitude reweighted by exp(tanh(Φ(A))) → phase frozen → IFFT.
+    Phase ≈ structure location (misregistration); amplitude ≈ texture energy.
+    Zero-init → identity.
+    """
+
+    def __init__(self, feat_ch):
+        super().__init__()
+        self.amp = nn.Sequential(
+            nn.Conv2d(feat_ch, feat_ch, 3, 1, 1),
+            nn.GELU(),
+            nn.Conv2d(feat_ch, 3, 3, 1, 1),
+        )
+        nn.init.zeros_(self.amp[-1].weight)
+        nn.init.zeros_(self.amp[-1].bias)
+
+    def forward(self, feat, img):
+        B, C, H, W = img.shape
+        with torch.autocast(device_type="cuda" if img.is_cuda else "cpu", enabled=False):
+            g = torch.exp(torch.tanh(self.amp(feat.float())))  # B,3,H,W
+            x_f = torch.fft.rfft2(img.float(), norm="ortho")
+            # broadcast spatial gain onto freq bins via mean per-channel (stable)
+            # use spatial mean of g so we don't need FFT-sized maps: global per-channel gain
+            g_mean = g.mean(dim=(2, 3), keepdim=True)  # B,3,1,1
+            amp = torch.abs(x_f) * g_mean
+            phase = torch.angle(x_f)
+            out = torch.fft.irfft2(torch.polar(amp, phase), s=(H, W), norm="ortho")
+        return out.to(dtype=img.dtype)
+
+
+class RadialPSFHead(nn.Module):
+    """
+    Radial PSF residual: out = x + γ(p) ⊙ (x − G_σ * x)  (unsharp / de-PSF).
+
+    γ from features (spatially varying); fixed small Gaussian blur. Zero-init γ → identity.
+    """
+
+    def __init__(self, feat_ch, ksize=7, sigma=1.5):
+        super().__init__()
+        self.ksize = ksize
+        self.sigma = sigma
+        self.gain = nn.Sequential(
+            nn.Conv2d(feat_ch, feat_ch, 3, 1, 1),
+            nn.GELU(),
+            nn.Conv2d(feat_ch, 3, 3, 1, 1),
+        )
+        nn.init.zeros_(self.gain[-1].weight)
+        nn.init.zeros_(self.gain[-1].bias)
+
+    def _gauss_kernel(self, device, dtype):
+        k = self.ksize
+        coords = torch.arange(k, device=device, dtype=dtype) - k // 2
+        g = torch.exp(-(coords**2) / (2 * self.sigma**2))
+        g = g / g.sum()
+        kernel = (g[:, None] @ g[None, :]).unsqueeze(0).unsqueeze(0)
+        return kernel.expand(3, 1, k, k).contiguous()
+
+    def forward(self, feat, img):
+        B, C, H, W = img.shape
+        with torch.autocast(device_type="cuda" if img.is_cuda else "cpu", enabled=False):
+            imgf = img.float()
+            ker = self._gauss_kernel(img.device, imgf.dtype)
+            blur = F.conv2d(imgf, ker, padding=self.ksize // 2, groups=3)
+            hp = imgf - blur
+            gamma = 2.0 * torch.tanh(self.gain(feat.float()))  # (-2,2)
+            out = imgf + gamma * hp
+        return out.to(dtype=img.dtype)
+
+
+class WienerHead(nn.Module):
+    """
+    Differentiable radial Wiener/MTF band-gain (inference-time).
+
+    Predict n_bands spatially varying gains g_b = exp(tanh(·)) ∈ (e^{-1}, e^{1}),
+    apply them on soft radial frequency masks of the current RGB reconstruction
+    (FFT → band-weighted gain → IFFT). Zero-init → identity at step 0.
+    """
+
+    def __init__(self, feat_ch, n_bands=4):
+        super().__init__()
+        self.n_bands = n_bands
+        self.to_gain = nn.Sequential(
+            nn.Conv2d(feat_ch, feat_ch, 3, 1, 1),
+            nn.GELU(),
+            nn.Conv2d(feat_ch, n_bands, 3, 1, 1),
+        )
+        nn.init.zeros_(self.to_gain[-1].weight)
+        nn.init.zeros_(self.to_gain[-1].bias)
+
+    def _radial_masks(self, H, W, device, dtype):
+        fy = torch.fft.fftfreq(H, device=device, dtype=dtype)
+        fx = torch.fft.rfftfreq(W, device=device, dtype=dtype)
+        gy, gx = torch.meshgrid(fy, fx, indexing="ij")
+        r = torch.sqrt(gx * gx + gy * gy) / 0.70710678  # ~[0,1]
+        centers = torch.linspace(0.0, 1.0, self.n_bands, device=device, dtype=dtype)
+        bw = 1.0 / max(self.n_bands - 1, 1)
+        masks = []
+        for c in centers:
+            masks.append(torch.exp(-((r - c) / (bw + 1e-6)) ** 2))
+        masks = torch.stack(masks, dim=0)  # n_bands, H, Wf
+        masks = masks / (masks.sum(dim=0, keepdim=True) + 1e-8)
+        return masks  # n_bands, H, Wf
+
+    def forward(self, feat, img):
+        """feat: B,Cf,H,W  img: B,3,H,W → same shape as img (fp32 FFT)."""
+        B, C, H, W = img.shape
+        device = img.device
+        with torch.autocast(device_type="cuda" if img.is_cuda else "cpu", enabled=False):
+            gain = torch.exp(torch.tanh(self.to_gain(feat.float())))  # B, nb, H, W
+            x_f = torch.fft.rfft2(img.float(), norm="ortho")
+            masks = self._radial_masks(H, W, device, torch.float32)  # nb, H, Wf
+            out = torch.zeros_like(img.float())
+            for b in range(self.n_bands):
+                band = torch.fft.irfft2(x_f * masks[b].unsqueeze(0).unsqueeze(0), s=(H, W), norm="ortho")
+                out = out + gain[:, b : b + 1] * band
+        return out.to(dtype=img.dtype)
+
+
 class ModSwinIR(nn.Module):
     """
     LR → shallow → RAPE-FiLM → DeformAlign → RSTB×N (OCA+GDFN+AMF, mid FiLM)
@@ -72,8 +193,12 @@ class ModSwinIR(nn.Module):
         uncertainty=True,
         residual_recon=True,
         film_mid=True,
-        use_kpn=True,
+        use_kpn=False,
         kpn_size=5,
+        use_wiener=False,
+        wiener_bands=4,
+        use_ampphase=False,
+        use_radialpsf=False,
         resi_connection="1conv",
     ):
         super().__init__()
@@ -85,6 +210,9 @@ class ModSwinIR(nn.Module):
         self.residual_recon = residual_recon
         self.film_mid = film_mid
         self.use_kpn = use_kpn
+        self.use_wiener = use_wiener
+        self.use_ampphase = use_ampphase
+        self.use_radialpsf = use_radialpsf
         self.window_size = window_size
         self.embed_dim = embed_dim
 
@@ -139,6 +267,9 @@ class ModSwinIR(nn.Module):
 
         # local kernel base (replaces pure bicubic when enabled)
         self.kpn = LocalKernelHead(embed_dim, k=kpn_size, upscale=upscale) if use_kpn else None
+        self.wiener = WienerHead(embed_dim, n_bands=wiener_bands) if use_wiener else None
+        self.ampphase = AmpPhaseHead(embed_dim) if use_ampphase else None
+        self.radial_psf = RadialPSFHead(embed_dim) if use_radialpsf else None
 
         self.unc_head = (
             nn.Sequential(
@@ -241,9 +372,16 @@ class ModSwinIR(nn.Module):
             base = self.kpn(fea, base)
 
         if self.residual_recon:
+            if self.wiener is not None:
+                res = self.wiener(x_up, res)
+            if self.ampphase is not None:
+                res = self.ampphase(x_up, res)
             sr = base + res
         else:
             sr = res + mean
+
+        if self.radial_psf is not None:
+            sr = self.radial_psf(x_up, sr)
 
         log_var = None
         if self.uncertainty and self.unc_head is not None:
