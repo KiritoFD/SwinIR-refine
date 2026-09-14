@@ -99,8 +99,11 @@ def main():
     arch = train_args.get("arch", meta.get("arch", "mod"))
 
     if arch == "swinir":
-        raise SystemExit("swinir_baseline removed; use mod checkpoints only")
-    model = build_model(upscale=upscale, size=model_size).to(device)
+        from .swinir_baseline import SwinIRTrainWrapper, build_swinir
+
+        model = SwinIRTrainWrapper(build_swinir(size=model_size, upscale=upscale)).to(device)
+    else:
+        model = build_model(upscale=upscale, size=model_size).to(device)
     missing, unexpected = model.load_state_dict(ckpt["model"], strict=False)
     if missing:
         print(f"missing keys: {missing[:8]}{'...' if len(missing) > 8 else ''}")
