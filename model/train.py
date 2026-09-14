@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from .dataset import RealSRPairDataset, build_realsr_index
 from .losses import OffsetAlignedLoss, psnr, rgb_to_y
 from .model import build_model
+from .optim import CompositeOptimizer, build_optimizer
 
 
 def parse_args():
@@ -43,6 +44,7 @@ def parse_args():
     p.add_argument("--eval-tile", type=int, default=128)
     p.add_argument("--save-every", type=int, default=3000)
     p.add_argument("--resume", type=str, default="")
+    p.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "muon"])
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -130,7 +132,21 @@ def main():
         criterion = None
         extra = []
 
-    optim = torch.optim.AdamW(list(model.parameters()) + extra, lr=args.lr, betas=(0.9, 0.99), weight_decay=1e-4)
+    if args.optimizer == "muon":
+        # wrap so Muon sees ndim>=2 weights from model + aligner together
+        class _Bag(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = model
+                if use_align:
+                    self.offset_net = criterion.offset_net
+
+        optim = build_optimizer(_Bag(), name="muon", lr=args.lr, weight_decay=1e-4)
+    else:
+        optim = torch.optim.AdamW(
+            list(model.parameters()) + extra, lr=args.lr, betas=(0.9, 0.99), weight_decay=1e-4
+        )
+    print(f"optimizer={args.optimizer}")
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp)
 
     ema = None
@@ -191,10 +207,18 @@ def main():
 
         if torch.isfinite(total):
             scaler.scale(total).backward()
-            scaler.unscale_(optim)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            scaler.step(optim)
-            scaler.update()
+            if isinstance(optim, CompositeOptimizer):
+                for sub in optim.optimizers:
+                    scaler.unscale_(sub)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                for sub in optim.optimizers:
+                    scaler.step(sub)
+                scaler.update()
+            else:
+                scaler.unscale_(optim)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optim)
+                scaler.update()
             optim.zero_grad(set_to_none=True)
             ema_update()
         else:

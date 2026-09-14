@@ -17,3 +17,5 @@ __pycache__/
 
 # worktrees
 .worktrees/
+
+third_party/
