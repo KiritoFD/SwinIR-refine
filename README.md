@@ -41,7 +41,7 @@ python -m model.train `
 | `--align-loss` | Offset-aligned L1 (default on; `--no-align-loss` to disable) |
 | `--ema 0.999` | EMA weights |
 | `--optimizer adamw\|muon` | Optimizer (Muon ported from sr-scaling) |
-| `--model-size base\|large` | 4.05M / ~12M |
+| `--model-size base` | 4.05M (current slim package) |
 
 ## Evaluate (official RealSR protocol)
 
@@ -64,12 +64,13 @@ Details: [`exp/EVAL_PROTOCOL.md`](exp/EVAL_PROTOCOL.md).
 | Item | Status |
 |------|--------|
 | Best recipe | Residual bicubic + Align-L1 + EMA + 12k steps (E11, 4.05M) |
-| Internal 12-img RGB/Y | 31.73 / 32.40 (old full-range Y; **not** official) |
-| Official full Test | pending re-run with `model.eval` after cleanup |
-| Confirmed gains | Align L1 **+0.57 dB** vs same trunk pure L1; L1 vs UWCL **+0.95** |
-| Failed (do not re-enable) | UWCL/CX main loss, Wiener/AmpPhase/RadialPSF heads, LP-KPN on top of Align |
+| **Official full Test (100 pairs)** | **Y 33.47 / SSIM 0.9144** · RGB 31.62 |
+| A0 pure L1 same trunk | Y 33.37 → Align **+0.10 dB** |
+| SwinIR-largeish L1 baseline | Y 32.97 → E11 **+0.50 dB** |
+| Failed (do not re-enable) | UWCL/CX, Wiener/AmpPhase/RadialPSF, LP-KPN on Align |
+| Muon A/B | training (`E11c_muon`) |
 
-Full write-up: [`exp/VERIFIED_SUMMARY.md`](exp/VERIFIED_SUMMARY.md), [`exp/NEGATIVE.md`](exp/NEGATIVE.md).
+Full write-up: [`exp/OFFICIAL_EVAL.md`](exp/OFFICIAL_EVAL.md), [`exp/VERIFIED_SUMMARY.md`](exp/VERIFIED_SUMMARY.md).
 
 ## Citations
 

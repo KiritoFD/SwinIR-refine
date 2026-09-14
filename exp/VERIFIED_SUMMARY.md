@@ -2,18 +2,34 @@
 
 **验证日：** 2026-09-14  
 **代码：** `model/` — 仅 L1 / Align / EMA / 残差 bicubic / Muon；**无** Wiener·AmpPhase·RadialPSF·UWCL  
-**协议：** RealSR V3 ×2，12 张 tiled Test
+**官方协议：** RealSR V3 ×2 Test.m，**全量 100 对**（见 [OFFICIAL_EVAL.md](OFFICIAL_EVAL.md)）
 
 ---
 
-## 1. 验证结果（本轮复跑）
+## 0. 官方全量主结果（权威）
+
+| 模型 | **Y-PSNR** | Y-SSIM | RGB |
+|------|------------|--------|-----|
+| **E11 Align-L1+EMA 12k** | **33.47** | **0.9144** | 31.62 |
+| A0 同主干 pure L1 | 33.37 | 0.9124 | 31.51 |
+| E2 SwinIR-largeish L1 | 32.97 | 0.9058 | 31.13 |
+| E9 同主干 L1 12k 无 Align | 32.92 | 0.9091 | 31.11 |
+| E1 SwinIR-light | 32.88 | 0.9026 | 31.06 |
+
+- Align 官方增量：**+0.10 dB Y**（vs A0）
+- vs SwinIR-capmatch：**+0.50 dB Y**
+- 下表旧 12 张数字仅作历史参考
+
+---
+
+## 1. 验证结果（旧 12 张子集复跑）
 
 | 检查 | 结果 |
 |------|------|
 | `build_model` + Align 前向反向 | PASS（4.05M） |
 | `model.train` 4-step smoke | PASS |
 | `model.eval` 加载 E11 | PASS（忽略旧 ckpt 里 kpn/unc_head 多余键） |
-| E11 12 张 | **RGB 31.73 / SSIM 0.902 · Y 32.40 / 0.910** |
+| E11 12 张 | **RGB 31.73 / SSIM 0.902 · Y 32.40 / 0.910**（非官方 Y） |
 
 ---
 

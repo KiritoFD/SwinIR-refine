@@ -88,11 +88,13 @@ def run_eval(model, data_root, scale, cameras, max_pairs=6, tile=128, border=0):
         sr_u8 = tiled_forward(model, to_tensor(lr_u8), sc, tile=tile)
         hh = min(sr_u8.shape[0], hr_u8.shape[0])
         ww = min(sr_u8.shape[1], hr_u8.shape[1])
-        rows.append(official_pair_metrics(sr_u8[:hh, :ww], hr_u8[:hh, :ww]))
+        rows.append(official_pair_metrics(sr_u8[:hh, :ww], hr_u8[:hh, :ww], with_rgb_ssim=False))
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     model.train()
     return {
         "psnr": float(np.mean([r["psnr_rgb"] for r in rows])),
-        "ssim": float(np.mean([r["ssim_rgb"] for r in rows])),
+        "ssim": float(np.nanmean([r["ssim_rgb"] for r in rows])),
         "psnr_y": float(np.mean([r["psnr_y"] for r in rows])),
         "ssim_y": float(np.mean([r["ssim_y"] for r in rows])),
         "n": len(rows),

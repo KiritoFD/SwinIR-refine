@@ -51,36 +51,32 @@ def _gaussian_kernel(size: int = 11, sigma: float = 1.5) -> np.ndarray:
 
 def ssim_uint8(a: np.ndarray, b: np.ndarray, crop: int = 5) -> float:
     """BasicSR/MATLAB-style SSIM on single-channel uint8 (or float)."""
-    a = a.astype(np.float64)
-    b = b.astype(np.float64)
-    c1 = (0.01 * 255) ** 2
-    c2 = (0.03 * 255) ** 2
-    win = _gaussian_kernel(11, 1.5)
-    pad = 5
-
-    def conv(x):
-        # valid conv then crop pad like BasicSR
-        H, W = x.shape
-        xp = np.pad(x, pad, mode="reflect")
-        out = np.zeros((H, W), dtype=np.float64)
-        for i in range(11):
-            for j in range(11):
-                out += win[i, j] * xp[i : i + H, j : j + W]
-        return out
+    import torch
+    import torch.nn.functional as F
 
     if crop > 0:
         a = a[crop:-crop, crop:-crop]
         b = b[crop:-crop, crop:-crop]
-    mu_a, mu_b = conv(a), conv(b)
+    c1 = (0.01 * 255) ** 2
+    c2 = (0.03 * 255) ** 2
+    win = torch.from_numpy(_gaussian_kernel(11, 1.5)).float().view(1, 1, 11, 11)
+    ta = torch.from_numpy(np.ascontiguousarray(a)).float().unsqueeze(0).unsqueeze(0)
+    tb = torch.from_numpy(np.ascontiguousarray(b)).float().unsqueeze(0).unsqueeze(0)
+    pad = 5
+
+    def conv(x):
+        return F.conv2d(F.pad(x, (pad, pad, pad, pad), mode="reflect"), win)
+
+    mu_a, mu_b = conv(ta), conv(tb)
     mu_a2, mu_b2, mu_ab = mu_a * mu_a, mu_b * mu_b, mu_a * mu_b
-    sa = conv(a * a) - mu_a2
-    sb = conv(b * b) - mu_b2
-    sab = conv(a * b) - mu_ab
+    sa = conv(ta * ta) - mu_a2
+    sb = conv(tb * tb) - mu_b2
+    sab = conv(ta * tb) - mu_ab
     ssim_map = ((2 * mu_ab + c1) * (2 * sab + c2)) / ((mu_a2 + mu_b2 + c1) * (sa + sb + c2) + 1e-12)
-    return float(ssim_map.mean())
+    return float(ssim_map.mean().item())
 
 
-def official_pair_metrics(sr_rgb: np.ndarray, hr_rgb: np.ndarray) -> dict:
+def official_pair_metrics(sr_rgb: np.ndarray, hr_rgb: np.ndarray, with_rgb_ssim: bool = False) -> dict:
     """Official protocol metrics for one pair.
 
     sr_rgb/hr_rgb: uint8 HWC RGB, same size (already modcropped).
@@ -91,7 +87,7 @@ def official_pair_metrics(sr_rgb: np.ndarray, hr_rgb: np.ndarray) -> dict:
     psnr_y = psnr_uint8(y_s, y_h)
     ssim_y = ssim_uint8(y_s, y_h, crop=5)
     psnr_rgb = psnr_uint8(sr_rgb, hr_rgb)
-    ssim_rgb = ssim_uint8(sr_rgb.mean(axis=2), hr_rgb.mean(axis=2), crop=5)
+    ssim_rgb = ssim_uint8(sr_rgb.mean(axis=2), hr_rgb.mean(axis=2), crop=5) if with_rgb_ssim else float("nan")
     return {
         "psnr_y": psnr_y,
         "ssim_y": ssim_y,
