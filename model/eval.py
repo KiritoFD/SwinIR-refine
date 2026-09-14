@@ -136,12 +136,14 @@ def main():
     arch = train_args.get("arch", meta.get("arch", "mod"))
 
     if arch == "swinir":
-        from .swinir_baseline import SwinIRTrainWrapper, build_swinir
-
-        model = SwinIRTrainWrapper(build_swinir(model_size, upscale=upscale)).to(device)
+        raise SystemExit("swinir_baseline removed; use mod checkpoints only")
     else:
         model = build_model(upscale=upscale, size=model_size).to(device)
-    model.load_state_dict(ckpt["model"])
+    missing, unexpected = model.load_state_dict(ckpt["model"], strict=False)
+    if missing:
+        print(f"missing keys: {missing[:8]}{'...' if len(missing)>8 else ''}")
+    if unexpected:
+        print(f"ignore extra ckpt keys ({len(unexpected)}): {unexpected[:6]}")
     model.eval()
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"loaded {ckpt_path} step={ckpt.get('step')} {arch}/{model_size} ({n_params:.2f}M) x{upscale}")
