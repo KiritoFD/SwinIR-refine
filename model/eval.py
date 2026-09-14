@@ -140,29 +140,7 @@ def main():
 
         model = SwinIRTrainWrapper(build_swinir(model_size, upscale=upscale)).to(device)
     else:
-        kw = {}
-        for flag, key in [
-            ("use_kpn", "use_kpn"),
-            ("use_wiener", "use_wiener"),
-            ("use_ampphase", "use_ampphase"),
-            ("use_radialpsf", "use_radialpsf"),
-        ]:
-            if train_args.get(flag) or train_args.get(flag.replace("use_", "use_")):
-                kw[key] = True
-            if train_args.get("no_kpn") and key == "use_kpn":
-                kw[key] = False
-            if train_args.get("no_wiener") and key == "use_wiener":
-                kw[key] = False
-        # E13 was trained with use_kpn default True historically; infer from args
-        if train_args.get("no_kpn"):
-            kw["use_kpn"] = False
-        if train_args.get("no_wiener"):
-            kw["use_wiener"] = False
-        if train_args.get("use_ampphase"):
-            kw["use_ampphase"] = True
-        if train_args.get("use_radialpsf"):
-            kw["use_radialpsf"] = True
-        model = build_model(upscale=upscale, size=model_size, **kw).to(device)
+        model = build_model(upscale=upscale, size=model_size).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
