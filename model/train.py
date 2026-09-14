@@ -14,7 +14,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .dataset import RealSRPairDataset, build_realsr_index
-from .losses import OffsetAlignedLoss, psnr, rgb_to_y
+from .losses import OffsetAlignedLoss, psnr
+from .metrics import modcrop, official_pair_metrics
 from .model import build_model
 from .optim import CompositeOptimizer, build_optimizer
 
@@ -28,6 +29,7 @@ def parse_args():
     p.add_argument("--model-size", type=str, default="base")
     p.add_argument("--lr-patch", type=int, default=64)
     p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--grad-accum", type=int, default=1)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--steps", type=int, default=12000)
     p.add_argument("--warmup", type=int, default=150)
@@ -42,6 +44,7 @@ def parse_args():
     p.add_argument("--eval-every", type=int, default=1500)
     p.add_argument("--eval-pairs", type=int, default=6)
     p.add_argument("--eval-tile", type=int, default=128)
+    p.add_argument("--eval-border", type=int, default=0, help="shave border px (official often uses scale)")
     p.add_argument("--save-every", type=int, default=3000)
     p.add_argument("--resume", type=str, default="")
     p.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "muon"])
@@ -66,8 +69,9 @@ def lr_at(step, base, warmup, total):
 
 
 @torch.no_grad()
-def run_eval(model, data_root, scale, cameras, max_pairs=6, tile=128):
-    from .eval import load_png, ssim_torch, tiled_forward, to_tensor
+def run_eval(model, data_root, scale, cameras, max_pairs=6, tile=128, border=0):
+    """Fast subset eval with official Y metrics (limited-range, uint8)."""
+    from .eval import load_rgb_u8, tiled_forward, to_tensor
 
     model.eval()
     pairs = build_realsr_index(data_root, cameras, "Test", (scale,))
@@ -75,29 +79,24 @@ def run_eval(model, data_root, scale, cameras, max_pairs=6, tile=128):
         return {"psnr": 0.0, "ssim": 0.0, "psnr_y": 0.0, "ssim_y": 0.0, "n": 0}
     st = max(1, len(pairs) // max_pairs)
     pairs = pairs[::st][:max_pairs]
-    ps, ss, py, sy = [], [], [], []
+    rows = []
     for lr_path, hr_path, sc in pairs:
-        lr_np = load_png(lr_path)
-        hr_np = load_png(hr_path)
-        h, w = lr_np.shape[:2]
-        hr_np = hr_np[: h * sc, : w * sc]
-        sr = tiled_forward(model, to_tensor(lr_np), sc, tile=tile)
-        hr_t = to_tensor(hr_np)
-        hh = min(sr.shape[1], hr_t.shape[1])
-        ww = min(sr.shape[2], hr_t.shape[2])
-        s, y = sr[:, :hh, :ww], hr_t[:, :hh, :ww]
-        ps.append(psnr(s, y))
-        ss.append(ssim_torch(s, y))
-        ys, yh = rgb_to_y(s), rgb_to_y(y)
-        py.append(psnr(ys, yh))
-        sy.append(ssim_torch(ys, yh))
+        lr_u8 = modcrop(load_rgb_u8(lr_path), 4)
+        hr_u8 = modcrop(load_rgb_u8(hr_path), 4)
+        h, w = lr_u8.shape[:2]
+        hr_u8 = hr_u8[: h * sc, : w * sc]
+        sr_u8 = tiled_forward(model, to_tensor(lr_u8), sc, tile=tile)
+        hh = min(sr_u8.shape[0], hr_u8.shape[0])
+        ww = min(sr_u8.shape[1], hr_u8.shape[1])
+        rows.append(official_pair_metrics(sr_u8[:hh, :ww], hr_u8[:hh, :ww]))
     model.train()
     return {
-        "psnr": float(np.mean(ps)),
-        "ssim": float(np.mean(ss)),
-        "psnr_y": float(np.mean(py)),
-        "ssim_y": float(np.mean(sy)),
-        "n": len(pairs),
+        "psnr": float(np.mean([r["psnr_rgb"] for r in rows])),
+        "ssim": float(np.mean([r["ssim_rgb"] for r in rows])),
+        "psnr_y": float(np.mean([r["psnr_y"] for r in rows])),
+        "ssim_y": float(np.mean([r["ssim_y"] for r in rows])),
+        "n": len(rows),
+        "border": 0,
     }
 
 
@@ -238,7 +237,15 @@ def main():
         do_eval = args.eval_every > 0 and ((step + 1) % args.eval_every == 0 or step == args.steps - 1)
         if do_eval:
             net = ema if ema is not None else model
-            ev = run_eval(net, args.data_root, args.scale, cameras, args.eval_pairs, args.eval_tile)
+            ev = run_eval(
+                net,
+                args.data_root,
+                args.scale,
+                cameras,
+                args.eval_pairs,
+                args.eval_tile,
+                border=args.eval_border,
+            )
             print(f"  EVAL {step+1}: RGB {ev['psnr']:.2f}/{ev['ssim']:.4f} Y {ev['psnr_y']:.2f}/{ev['ssim_y']:.4f}")
             with (out_dir / "eval_log.jsonl").open("a") as f:
                 f.write(json.dumps({"step": step + 1, **ev}) + "\n")

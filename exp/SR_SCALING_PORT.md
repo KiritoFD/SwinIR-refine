@@ -36,3 +36,25 @@
 
 - `model/optim.py`：Muon + `build_optimizer`（Muon 矩阵权重 + AdamW bias/norm）  
 - 训练入口：`python -m model.train --optimizer muon`（见 `model/train.py`）
+
+## 定量性能（zip 内能读到的）
+
+| 证据 | 指标 | 数字 |
+|------|------|------|
+| Muon SwinIR p16m bicubic ×4 | PSNR/SSIM | **29.13 / 0.823** |
+| RealDeg SwinIR p16m matched | PSNR/SSIM | **26.10 / 0.723** |
+| ESRGAN p16m bicubic best | PSNR | ~27.8（低于 SwinIR） |
+| ResShift official 10k backend | PSNR/LPIPS/FID | 26.99 / 0.114 / 54.9 |
+
+**Pixel Diffusion**：文档称 formal 覆盖 30/30 train + 全套 FID/IQA，但**具体 CSV 在远端 aggregate，本 zip 无数字表**。叙事一致：diffusion 主打感知，不抢 PSNR。
+
+## Pixel Diffusion 能否做好 RealSR？
+
+**主观/FID 可以；配对 PSNR 很难赢回归模型。**
+
+- 逆问题多峰：扩散是「合法解采样」，PSNR 要的是对那一张 GT 的 MSE 最优（条件均值）。
+- RealSR 错位让多峰更重；406 对 + 8GB 也不适合像素扩散训练。
+- 他们自己的对照：SwinIR 回归 29.13 > ResShift 官方 26.99 PSNR；ESRGAN 也低于 SwinIR PSNR。
+
+**建议：** PSNR 主线继续 Align + ModSwinIR；扩散只在「感知/FID 另开 lane」时考虑，本轮不移植。
+
