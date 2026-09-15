@@ -19,12 +19,13 @@ def modcrop(img: np.ndarray, modulo: int) -> np.ndarray:
 def rgb_to_y_matlab(rgb: np.ndarray) -> np.ndarray:
     """MATLAB rgb2ycbcr Y (ITU-R BT.601 limited range).
 
-    Input RGB float in [0,1] or uint8. Output Y in [16, 235] float64.
+    Input RGB float in [0,1] or uint8. Output Y in [16, 235] float32.
+    float32 is enough for uint8 PSNR/SSIM and avoids ~2x RAM on 2k+ images.
     """
     if rgb.dtype == np.uint8:
-        x = rgb.astype(np.float64) / 255.0
+        x = rgb.astype(np.float32) / 255.0
     else:
-        x = rgb.astype(np.float64)
+        x = rgb.astype(np.float32)
     # RGB order: Y = 16 + 65.481 R + 128.553 G + 24.966 B
     return 16.0 + x[..., 0] * 65.481 + x[..., 1] * 128.553 + x[..., 2] * 24.966
 
@@ -34,9 +35,10 @@ def to_uint8(x: np.ndarray) -> np.ndarray:
 
 
 def psnr_uint8(a: np.ndarray, b: np.ndarray) -> float:
-    a = a.astype(np.float64)
-    b = b.astype(np.float64)
-    mse = np.mean((a - b) ** 2)
+    a = a.astype(np.float32)
+    b = b.astype(np.float32)
+    diff = a - b
+    mse = float(np.mean(diff * diff, dtype=np.float64))
     if mse <= 1e-12:
         return 99.0
     return float(10.0 * math.log10(255.0 * 255.0 / mse))

@@ -39,8 +39,9 @@ def tiled_forward(model, lr: torch.Tensor, scale: int, tile: int = 256, pad: int
     _, H, W = lr.shape
     device = next(model.parameters()).device
     out_h, out_w = H * scale, W * scale
-    sr = torch.zeros(3, out_h, out_w, device=device)
-    acc = torch.zeros(1, out_h, out_w, device=device)
+    # Accumulate on CPU: 2k+ SR tensors on an 8GB card OOM under RAPE FiLM.
+    sr = torch.zeros(3, out_h, out_w)
+    acc = torch.zeros(1, out_h, out_w)
 
     ys = list(range(0, max(H - tile, 0) + 1, tile))
     if not ys or ys[-1] + tile < H:
@@ -59,7 +60,8 @@ def tiled_forward(model, lr: torch.Tensor, scale: int, tile: int = 256, pad: int
             x1 = min(W, x + tile + pad)
             patch = lr[:, y0:y1, x0:x1].unsqueeze(0).to(device)
             out, _ = model(patch)
-            out = out[0].clamp(0, 1)
+            out = out[0].clamp(0, 1).float().cpu()
+            del patch
             ry0 = (y - y0) * scale
             rx0 = (x - x0) * scale
             ry1 = ry0 + min(tile, H - y) * scale
@@ -72,6 +74,9 @@ def tiled_forward(model, lr: torch.Tensor, scale: int, tile: int = 256, pad: int
             src = (slice(None), slice(ry0, ry1), slice(rx0, rx1))
             sr[dst] += out[src]
             acc[dst] += 1.0
+            del out
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
     sr = sr / acc.clamp(min=1.0)
     return (sr.clamp(0, 1) * 255.0).round().byte().cpu().permute(1, 2, 0).numpy()

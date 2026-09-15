@@ -1,0 +1,16 @@
+@echo off
+setlocal
+set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+cd /d G:\RealSR
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\improve\E10_realsr_loss_15k\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\E10_realsr_loss" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\ablation_x2\A1_l1_ema\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\A1_l1_ema" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\ablation_x2\A2_l1_ema_patchamp\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\A2_l1_ema_patchamp" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\ablation_x2\A3_l1_ema_hfconf\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\A3_l1_ema_hfconf" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\ablation_x2\A4_full\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\A4_full" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\improve\E7_mod_v2_l1_amp_ema\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\E7_v2_l1_amp_ema" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\improve\E8_v2_kpn\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\E8_v2_kpn" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\improve\E12_align_lpkpn\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\E12_lpkpn" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\improve\E13_align_wiener\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\E13_wiener" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\improve\E14_align_ampphase\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\E14_ampphase" --tile 128
+"C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe" -m model.eval --ckpt "G:\RealSR\experiments\improve\E15_align_radialpsf\ckpt_best.pt" --data-root "G:\RealSR\data\RealSR(V3)" --scale 2 --max-pairs 0 --out "G:\RealSR\experiments\eval_official\batch_20260915\E15_radialpsf" --tile 128
+echo DONE_ALL_EVALS
