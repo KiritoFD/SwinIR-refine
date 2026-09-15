@@ -51,7 +51,7 @@ def run_one(name: str, ckpt: str) -> dict:
     # isolate eval in subprocess so a CUDA error cannot poison the next model
     cmd = (
         f'"{PY}" -m model.eval --ckpt "{ckpt}" --data-root "{DATA}" '
-        f"--scale 2 --max-pairs 0 --out \"{out}\" --tile 96"
+        f"--scale 2 --max-pairs 0 --out \"{out}\" --tile 96 --resume"
     )
     print(f"==== {name} ====", flush=True)
     t0 = time.time()

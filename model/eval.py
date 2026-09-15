@@ -89,9 +89,10 @@ def main():
     p.add_argument("--scale", type=int, default=2)
     p.add_argument("--cameras", type=str, default="Canon,Nikon")
     p.add_argument("--max-pairs", type=int, default=0, help="0 = full official Test set")
-    p.add_argument("--tile", type=int, default=256)
+    p.add_argument("--tile", type=int, default=96)
     p.add_argument("--out", type=str, default=None)
     p.add_argument("--save-images", action="store_true")
+    p.add_argument("--resume", action="store_true", help="skip images already in per_image.jsonl")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -127,44 +128,90 @@ def main():
 
     out_dir = Path(args.out) if args.out else ckpt_path.parent / "eval_official"
     out_dir.mkdir(parents=True, exist_ok=True)
+    partial_path = out_dir / "per_image.jsonl"
 
-    rows = []
+    done: dict[str, dict] = {}
+    if args.resume and partial_path.exists():
+        for line in partial_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("name") and "psnr_y" in rec:
+                done[rec["name"]] = rec
+        print(f"resume: {len(done)} images already done")
+
+    def append_partial(rec: dict) -> None:
+        with partial_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+
+    rows = list(done.values())
     for i, (lr_path, hr_path, sc) in enumerate(pairs):
-        lr_u8 = load_rgb_u8(lr_path)
-        hr_u8 = load_rgb_u8(hr_path)
-        lr_u8 = modcrop(lr_u8, 4)
-        hr_u8 = modcrop(hr_u8, 4)
-        h, w = lr_u8.shape[:2]
-        hr_u8 = hr_u8[: h * sc, : w * sc]
-        lr_t = to_tensor(lr_u8)
-        sr_u8 = tiled_forward(model, lr_t, sc, tile=args.tile)
-        hh = min(sr_u8.shape[0], hr_u8.shape[0])
-        ww = min(sr_u8.shape[1], hr_u8.shape[1])
-        m = official_pair_metrics(sr_u8[:hh, :ww], hr_u8[:hh, :ww])
         name = Path(lr_path).name
-        m.update({"name": name, "scale": sc, "lr": lr_path})
-        rows.append(m)
+        if name in done:
+            continue
+        import gc
+
+        rec = None
+        for tile in (args.tile, max(48, args.tile // 2), 32):
+            try:
+                lr_u8 = load_rgb_u8(lr_path)
+                hr_u8 = load_rgb_u8(hr_path)
+                lr_u8 = modcrop(lr_u8, 4)
+                hr_u8 = modcrop(hr_u8, 4)
+                h, w = lr_u8.shape[:2]
+                hr_u8 = hr_u8[: h * sc, : w * sc]
+                lr_t = to_tensor(lr_u8)
+                sr_u8 = tiled_forward(model, lr_t, sc, tile=tile)
+                del lr_t
+                hh = min(sr_u8.shape[0], hr_u8.shape[0])
+                ww = min(sr_u8.shape[1], hr_u8.shape[1])
+                m = official_pair_metrics(sr_u8[:hh, :ww], hr_u8[:hh, :ww])
+                rec = {"name": name, "scale": sc, "lr": lr_path, "tile": tile, **m}
+                if args.save_images:
+                    lr_up = np.asarray(
+                        Image.fromarray(lr_u8).resize((w * sc, h * sc), Image.Resampling.BICUBIC)
+                    )
+                    canvas = np.concatenate([lr_up, sr_u8, hr_u8], axis=1)
+                    Image.fromarray(canvas).save(out_dir / f"{Path(name).stem}_x{sc}_cmp.png")
+                del sr_u8, lr_u8, hr_u8
+                break
+            except Exception as e:  # noqa: BLE001
+                print(f"  retry {name} tile={tile} after {type(e).__name__}: {e}", flush=True)
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                rec = None
+        if rec is None:
+            rec = {"name": name, "scale": sc, "lr": lr_path, "psnr_y": float("nan"),
+                   "ssim_y": float("nan"), "psnr_rgb": float("nan"), "ssim_rgb": float("nan"),
+                   "error": "failed all tile retries"}
+        done[name] = rec
+        rows.append(rec)
+        append_partial(rec)
         print(
             f"[{i+1}/{len(pairs)}] {name} x{sc}  "
-            f"Y {m['psnr_y']:.2f}/{m['ssim_y']:.4f}  RGB {m['psnr_rgb']:.2f}",
+            f"Y {rec['psnr_y']:.2f}/{rec['ssim_y']:.4f}  RGB {rec['psnr_rgb']:.2f}",
             flush=True,
         )
-        if args.save_images:
-            lr_up = np.asarray(
-                Image.fromarray(lr_u8).resize((w * sc, h * sc), Image.Resampling.BICUBIC)
-            )
-            canvas = np.concatenate([lr_up, sr_u8, hr_u8], axis=1)
-            Image.fromarray(canvas).save(out_dir / f"{Path(name).stem}_x{sc}_cmp.png")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    ok_rows = [r for r in rows if "error" not in r and r.get("psnr_y") == r.get("psnr_y")]
 
     def mean(key):
-        return float(np.mean([r[key] for r in rows])) if rows else 0.0
+        return float(np.mean([r[key] for r in ok_rows])) if ok_rows else 0.0
 
     summary = {
         "protocol": "RealSR official Test.m (Y limited-range uint8, crop=0, modcrop=4)",
         "paper": "Cai et al., Toward Real-World Single Image Super-Resolution, ICCV 2019",
         "ckpt": str(ckpt_path),
         "scale": args.scale,
-        "n": len(rows),
+        "n": len(ok_rows),
+        "n_attempted": len(rows),
         "psnr_y": mean("psnr_y"),
         "ssim_y": mean("ssim_y"),
         "psnr_rgb": mean("psnr_rgb"),
@@ -173,7 +220,7 @@ def main():
     }
     (out_dir / "eval.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(
-        f"\n== OFFICIAL n={len(rows)} | "
+        f"\n== OFFICIAL n={len(ok_rows)} | "
         f"Y {summary['psnr_y']:.4f}/{summary['ssim_y']:.4f} | "
         f"RGB(aux) {summary['psnr_rgb']:.2f}/{summary['ssim_rgb']:.4f} =="
     )
