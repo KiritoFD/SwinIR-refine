@@ -72,17 +72,19 @@ def _rope_freqs(dim: int, pos: torch.Tensor, theta: float) -> torch.Tensor:
     return emb.cos(), emb.sin()
 
 
-def apply_rope(x: torch.Tensor, grid: int, theta: float = 100.0) -> torch.Tensor:
-    """Axial 2D RoPE. x: (B, heads, T, hd), T=grid*grid, hd%4==0.
+def apply_rope(x: torch.Tensor, gh: int, gw: int, theta: float = 100.0) -> torch.Tensor:
+    """Axial 2D RoPE on a RECTANGULAR grid. x: (B, heads, T, hd), T=gh*gw, hd%4==0.
 
-    First half of channels use row (y) position, second half use col (x).
+    First half of channels carries the row (y) position, second half the column.
+    Tiles are in general not square (image edges, VAE grid alignment), so gh/gw
+    must be tracked separately.
     """
     b, h, t, d = x.shape
-    assert t == grid * grid, (t, grid)
+    assert t == gh * gw, (t, gh, gw)
     assert d % 4 == 0, d
     device = x.device
-    ys = torch.arange(grid, device=device).float()
-    xs = torch.arange(grid, device=device).float()
+    ys = torch.arange(gh, device=device).float()
+    xs = torch.arange(gw, device=device).float()
     gy, gx = torch.meshgrid(ys, xs, indexing="ij")
     pos_y = gy.reshape(-1)
     pos_x = gx.reshape(-1)
@@ -108,7 +110,7 @@ class Attention(nn.Module):
             self.q_norm = RMSNorm(self.head_dim)
             self.k_norm = RMSNorm(self.head_dim)
 
-    def forward(self, x: torch.Tensor, grid: int) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, gh: int, gw: int) -> torch.Tensor:
         b, t, d = x.shape
         qkv = self.qkv(x).reshape(b, t, 3, self.num_heads, self.head_dim)
         q, k, v = qkv.unbind(2)  # (B,T,H,hd)
@@ -119,8 +121,8 @@ class Attention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
         if self.rope:
-            q = apply_rope(q, grid, self.rope_theta)
-            k = apply_rope(k, grid, self.rope_theta)
+            q = apply_rope(q, gh, gw, self.rope_theta)
+            k = apply_rope(k, gh, gw, self.rope_theta)
         out = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
         out = out.transpose(1, 2).reshape(b, t, d)
         return self.proj(out)
@@ -150,9 +152,9 @@ class DiTBlock(nn.Module):
         nn.init.zeros_(self.adaLN[1].weight)
         nn.init.zeros_(self.adaLN[1].bias)
 
-    def forward(self, x: torch.Tensor, c: torch.Tensor, grid: int) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, c: torch.Tensor, gh: int, gw: int) -> torch.Tensor:
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN(c).chunk(6, dim=-1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), grid)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), gh, gw)
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -227,45 +229,61 @@ class DiT(nn.Module):
         )
         self.final = FinalLayer(hidden_size, patch_size, in_channels)
 
-    def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
+    def grid_of(self, x: torch.Tensor) -> tuple[int, int]:
+        """(gh, gw) token grid implied by an input map of shape (B, C, H, W)."""
+        gh, gw = x.shape[-2] // self.patch_size, x.shape[-1] // self.patch_size
+        assert gh * self.patch_size == x.shape[-2] and gw * self.patch_size == x.shape[-1], (
+            f"input {tuple(x.shape[-2:])} is not a multiple of patch_size {self.patch_size}"
+        )
+        return gh, gw
+
+    def unpatchify(self, x: torch.Tensor, gh: int, gw: int) -> torch.Tensor:
         c = self.in_channels
         p = self.patch_size
-        g = int(round(math.sqrt(x.shape[1])))
-        assert g * g == x.shape[1], f"non-square token grid {x.shape[1]}"
-        x = x.reshape(x.shape[0], g, g, p, p, c)
+        x = x.reshape(x.shape[0], gh, gw, p, p, c)
         x = torch.einsum("nhwpqc->nchpwq", x)
-        return x.reshape(x.shape[0], c, g * p, g * p)
+        return x.reshape(x.shape[0], c, gh * p, gw * p)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """x: (B, C, H, W) at ANY size divisible by patch_size; t: (B,)."""
+        """x: (B, C, H, W) at ANY size divisible by patch_size (square or not); t: (B,)."""
+        gh, gw = self.grid_of(x)
         tokens = self.x_embedder(x)
-        grid = int(round(math.sqrt(tokens.shape[1])))
-        assert grid * grid == tokens.shape[1], (
-            f"input {tuple(x.shape[-2:])} -> {tokens.shape[1]} tokens is not a square grid"
-        )
+        assert tokens.shape[1] == gh * gw, (tokens.shape, gh, gw)
         c = self.t_embedder(t)
         for blk in self.blocks:
             if self.use_checkpoint and self.training:
-                tokens = checkpoint(blk, tokens, c, grid, use_reentrant=False)
+                tokens = checkpoint(blk, tokens, c, gh, gw, use_reentrant=False)
             else:
-                tokens = blk(tokens, c, grid)
+                tokens = blk(tokens, c, gh, gw)
         tokens = self.final(tokens, c)
-        return self.unpatchify(tokens)
+        return self.unpatchify(tokens, gh, gw)
+
+
+def _make(default: dict, kw: dict) -> DiT:
+    cfg = dict(default)
+    cfg.update(kw)          # explicit --hidden/--depth/--heads win over the preset
+    return DiT(**cfg)
+
+
+def DiT_XS(**kw):
+    """~5.4M: the closest DiT to SwinIR-base (4.05M). Use for param-matched A/B."""
+    return _make(dict(hidden_size=192, depth=8, num_heads=4), kw)
 
 
 def DiT_S(**kw):
-    return DiT(hidden_size=384, depth=12, num_heads=6, **kw)
-
-
-def DiT_B(**kw):
-    return DiT(hidden_size=768, depth=12, num_heads=12, **kw)
+    """33M: standard DiT-Small. Default for the matrix."""
+    return _make(dict(hidden_size=384, depth=12, num_heads=6), kw)
 
 
 def DiT_M(**kw):
-    return DiT(hidden_size=512, depth=16, num_heads=8, **kw)
+    return _make(dict(hidden_size=512, depth=16, num_heads=8), kw)
 
 
-SIZES = {"S": DiT_S, "M": DiT_M, "B": DiT_B}
+def DiT_B(**kw):
+    return _make(dict(hidden_size=768, depth=12, num_heads=12), kw)
+
+
+SIZES = {"XS": DiT_XS, "S": DiT_S, "M": DiT_M, "B": DiT_B}
 
 
 def build_dit(size: str = "S", **kw) -> DiT:

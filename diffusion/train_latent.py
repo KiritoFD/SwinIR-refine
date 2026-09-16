@@ -4,20 +4,16 @@ Two objectives, same backbone, same data, same crop size — this is the
 "latent" half of the 2x2 diffusion matrix:
 
 * ``flow``  : rectified flow matching (logit-normal t, Heun ODE at eval).
-              Stochastic, needs N integration steps.
 * ``reg``   : deterministic residual regressor in latent space,
-              z0_hat = z_cond + f(z_cond) with a zero-initialised final layer
-              (starts as "identity = bicubic"). This is the PSNR-optimal arm:
-              it directly predicts the conditional mean instead of sampling it.
+              z0_hat = z_cond + f(z_cond), zero-initialised head.
 
-Example (server 48G):
+Fast path: with ``--latent-cache`` (see ``diffusion.precompute_latents``) the VAE
+is not touched during training — the DiT step drops from ~1.18 s to ~0.17 s.
+
+Example (4090 48G):
   python -m diffusion.train_latent --objective flow --vae flux1-vae \
-    --lr-patch 128 --batch 32 --steps 20000 --amp \
-    --out experiments/diffusion/latent_flow
-
-  python -m diffusion.train_latent --objective reg --vae flux1-vae \
-    --lr-patch 128 --batch 32 --steps 20000 --amp \
-    --out experiments/diffusion/latent_reg
+    --latent-cache data/latents/flux1-vae --lr-patch 256 --batch 32 \
+    --steps 40000 --amp --out experiments/diffusion/latent_flow_flux
 """
 
 from __future__ import annotations
@@ -29,55 +25,61 @@ import math
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from .data import RealSRCropDataset
+from .data import LatentCropDataset, RealSRCropDataset, make_split
+from .data import default_root
 from .dit import build_dit
 from .flow import flow_loss, sample_flow
-from .vae import decode, decode_grad, encode, load_vae, psnr01, ssim01
+from .metrics import official_pair_metrics
+from .vae import decode, decode_grad, encode, load_vae
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--data-root", default=r"G:\RealSR\data\RealSR(V3)")
+    p.add_argument("--data-root", default="", help="auto-detected if empty")
     p.add_argument("--out", default=r"G:\RealSR\experiments\diffusion\latent_dit")
     p.add_argument("--objective", default="flow", choices=["flow", "reg"])
     p.add_argument("--vae", default="flux1-vae")
-    p.add_argument("--vae-dtype", default="fp32", choices=["fp32", "fp16", "bf16"])
-    p.add_argument("--size", default="S", choices=["S", "M", "B"])
+    p.add_argument("--vae-dtype", default="bf16", choices=["fp32", "fp16", "bf16"])
+    p.add_argument("--latent-cache", default="")
+    p.add_argument("--size", default="S", choices=["XS", "S", "M", "B"])
     p.add_argument("--patch", type=int, default=2)
-    p.add_argument("--hidden", type=int, default=0, help="0 = model default")
+    p.add_argument("--hidden", type=int, default=0)
     p.add_argument("--depth", type=int, default=0)
     p.add_argument("--heads", type=int, default=0)
     p.add_argument("--scale", type=int, default=2)
-    # HR crop = lr_patch * scale. Keep it equal to the eval HR tile so train and
-    # inference see the same token grid. 128 -> HR256 -> latent 32x32 (f8).
-    p.add_argument("--lr-patch", type=int, default=128)
+    p.add_argument("--lr-patch", type=int, default=256)
     p.add_argument("--batch", type=int, default=32)
-    p.add_argument("--steps", type=int, default=20000)
+    p.add_argument("--steps", type=int, default=40000)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup", type=int, default=500)
     p.add_argument("--weight-decay", type=float, default=0.0)
     p.add_argument("--t-sampler", default="logit_normal", choices=["logit_normal", "uniform", "cosmap"])
-    p.add_argument("--ema", type=float, default=0.999, help="0 disables; 0.999 fits 20k steps")
+    p.add_argument("--ema", type=float, default=0.999)
     p.add_argument("--grad-ckpt", action="store_true")
     p.add_argument("--amp", action="store_true")
-    # deterministic target: use the posterior mode, never sample the HR latent.
     p.add_argument("--sample-hr", type=int, default=0)
     p.add_argument("--reg-loss", default="l1", choices=["l1", "l2", "smoothl1"])
-    p.add_argument("--pixel-loss-weight", type=float, default=0.0,
-                   help="reg only: add L1 on decoded pixels (grad flows through frozen VAE)")
+    p.add_argument("--pixel-loss-weight", type=float, default=0.0)
     p.add_argument("--eval-every", type=int, default=1000)
-    p.add_argument("--eval-pairs", type=int, default=4)
-    p.add_argument("--eval-steps", type=int, default=20, help="flow only: ODE steps")
-    p.add_argument("--save-every", type=int, default=2000)
+    p.add_argument("--eval-steps", type=int, default=20)
+    p.add_argument("--val-pairs", type=int, default=16)
+    p.add_argument("--patience", type=int, default=8)
+    p.add_argument("--min-steps", type=int, default=4000)
+    p.add_argument("--val-eval-steps", type=int, default=8)
+    p.add_argument("--save-every", type=int, default=5000)
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--resume", default="")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    return p.parse_args()
+    args = p.parse_args()
+    if not getattr(args, "data_root", ""):
+        args.data_root = default_root()
+    return args
 
 
 def lr_at(step, base, warmup, total):
@@ -85,6 +87,33 @@ def lr_at(step, base, warmup, total):
         return base * (step + 1) / max(warmup, 1)
     t = (step - warmup) / max(total - warmup, 1)
     return base * 0.5 * (1 + math.cos(math.pi * min(t, 1.0)))
+
+
+@torch.no_grad()
+def run_val(net, val_ds, vae, vinfo, device, objective, steps, max_n, seed):
+    """True Y-PSNR on held-out pairs (raw images, so each item costs a VAE pass)."""
+    net.eval()
+    ys, ss = [], []
+    n = len(val_ds) if max_n <= 0 else min(len(val_ds), max_n)
+    t0 = torch.zeros(1, device=device)
+    for i in range(n):
+        b = val_ds[i]
+        lr = b["lr"].unsqueeze(0).to(device)
+        hr = b["hr"].unsqueeze(0).to(device)
+        lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
+        zc = encode(vae, lr_up, vinfo, sample=False)
+        if objective == "reg":
+            z = zc + net(zc, t0)
+        else:
+            z = sample_flow(net, zc.shape, cond=zc, steps=steps, solver="heun", device=device, seed=seed)
+        rec = decode(vae, z, vinfo)
+        sr_u8 = (rec[0].clamp(0, 1) * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
+        hr_u8 = (hr[0] * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
+        m = official_pair_metrics(sr_u8, hr_u8)
+        ys.append(m["psnr_y"])
+        ss.append(m["ssim_y"])
+    net.train()
+    return float(np.mean(ys)), float(np.mean(ss))
 
 
 def main():
@@ -97,20 +126,29 @@ def main():
 
     vae_dtype = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}[args.vae_dtype]
     vae, vinfo = load_vae(args.vae, device=device, dtype=vae_dtype)
-    ds = RealSRCropDataset(
-        args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True, None
-    )
-    loader = DataLoader(
-        ds,
-        batch_size=args.batch,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True,
-    )
     hr_px = args.lr_patch * args.scale
     assert hr_px % vinfo.downscale == 0, f"HR {hr_px} not divisible by VAE ds {vinfo.downscale}"
     lat = hr_px // vinfo.downscale
+
+    base = RealSRCropDataset(args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True)
+    train_base, val_ds = make_split(base, args.val_pairs, seed=args.seed)
+    val_names = set()
+    if val_ds is not None:
+        val_names = {Path(p[0]).stem for p in val_ds.pairs}
+
+    if args.latent_cache:
+        train_ds = LatentCropDataset(args.latent_cache, crop=lat, augment=True)
+        if val_names:
+            train_ds.files = [f for f in train_ds.files if f.stem not in val_names]
+        print(f"latent cache: {len(train_ds)} train pairs, {len(val_names)} held out", flush=True)
+    else:
+        train_ds = train_base
+
+    loader = DataLoader(
+        train_ds, batch_size=args.batch, shuffle=True, num_workers=args.num_workers,
+        pin_memory=True, drop_last=True,
+    )
+
     is_flow = args.objective == "flow"
     in_ch = 2 * vinfo.latent_channels if is_flow else vinfo.latent_channels
     kw = {"input_size": lat, "patch_size": args.patch, "in_channels": in_ch, "use_checkpoint": args.grad_ckpt}
@@ -123,9 +161,9 @@ def main():
     model = build_dit(args.size, **kw).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(
-        f"LatentDiT-{args.size} {n_params:.2f}M  objective={args.objective}  "
-        f"HR={hr_px} latent {lat}x{lat}x{vinfo.latent_channels} in_ch={in_ch}  "
-        f"VAE={vinfo.name}[{vinfo.norm_tag}]  pairs={len(ds)}",
+        f"LatentDiT-{args.size} {n_params:.2f}M  objective={args.objective}  HR={hr_px} "
+        f"latent {lat}x{lat}x{vinfo.latent_channels} in_ch={in_ch}  VAE={vinfo.name}[{vinfo.norm_tag}]  "
+        f"train={len(train_ds)} val={0 if val_ds is None else len(val_ds)} cache={bool(args.latent_cache)}",
         flush=True,
     )
 
@@ -146,24 +184,23 @@ def main():
 
     step = 0
     best = -1.0
+    no_gain = 0
     if args.resume and Path(args.resume).is_file():
         ck = torch.load(args.resume, map_location="cpu", weights_only=False)
         model.load_state_dict(ck["model"])
-        if ema is not None and "ema" in ck:
+        if ema is not None and ck.get("ema") is not None:
             ema.load_state_dict(ck["ema"])
         step = int(ck.get("step", 0))
-        best = float(ck.get("best_psnr01", -1.0))
+        best = float(ck.get("best_psnr_y", -1.0))
         print(f"resumed from {args.resume} step={step} best={best:.3f}", flush=True)
 
     amp_dtype = torch.bfloat16 if args.amp else torch.float32
     t_zeros = torch.zeros(1, device=device)
 
     def forward_loss(z0, zc, hr):
-        """z0/zc are normalized latents; hr is the rgb target in [0,1] (reg+pixel-loss only)."""
         if is_flow:
             return flow_loss(model, z0, zc, t_mode=args.t_sampler)[0]
-        res = model(zc, t_zeros.expand(zc.shape[0]))
-        z0_hat = zc + res
+        z0_hat = zc + model(zc, t_zeros.expand(zc.shape[0]))
         if args.reg_loss == "l2":
             loss = F.mse_loss(z0_hat, z0)
         elif args.reg_loss == "smoothl1":
@@ -178,22 +215,28 @@ def main():
     t0 = time.time()
     it = iter(loader)
     model.train()
+    stopped = False
     while step < args.steps:
         try:
             batch = next(it)
         except StopIteration:
             it = iter(loader)
             batch = next(it)
-        lr = batch["lr"].to(device, non_blocking=True)
-        hr = batch["hr"].to(device, non_blocking=True)
         cur_lr = lr_at(step, args.lr, args.warmup, args.steps)
         for g in opt.param_groups:
             g["lr"] = cur_lr
 
-        with torch.no_grad():
-            lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
-            z0 = encode(vae, hr, vinfo, sample=bool(args.sample_hr))
-            zc = encode(vae, lr_up, vinfo, sample=False)
+        if args.latent_cache:
+            z0 = batch["z0"].to(device, non_blocking=True)
+            zc = batch["zc"].to(device, non_blocking=True)
+            hr = None
+        else:
+            lr = batch["lr"].to(device, non_blocking=True)
+            hr = batch["hr"].to(device, non_blocking=True)
+            with torch.no_grad():
+                lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
+                z0 = encode(vae, hr, vinfo, sample=bool(args.sample_hr))
+                zc = encode(vae, lr_up, vinfo, sample=False)
 
         with torch.amp.autocast("cuda", enabled=args.amp, dtype=amp_dtype):
             loss = forward_loss(z0, zc, hr)
@@ -209,57 +252,45 @@ def main():
         opt.zero_grad(set_to_none=True)
         ema_update()
 
-        if step % 50 == 0 or step == args.steps - 1:
+        if step % 100 == 0 or step == args.steps - 1:
             mem = torch.cuda.max_memory_allocated(device) / 1024**3 if device.type == "cuda" else 0
             print(
-                f"step {step:06d}/{args.steps} | L {float(loss.detach()):.4f} | "
-                f"lr {cur_lr:.2e} | {mem:.2f}GB | {time.time()-t0:.0f}s",
+                f"step {step:06d}/{args.steps} | L {float(loss.detach()):.4f} | lr {cur_lr:.2e} | "
+                f"{mem:.2f}GB | {time.time()-t0:.0f}s",
                 flush=True,
             )
             with (out / "train_log.jsonl").open("a") as f:
                 f.write(json.dumps({"step": step, "loss": float(loss.detach()), "lr": cur_lr}) + "\n")
 
-        if args.eval_every > 0 and ((step + 1) % args.eval_every == 0 or step == args.steps - 1):
+        if args.eval_every > 0 and val_ds is not None and ((step + 1) % args.eval_every == 0):
             net = ema if ema is not None else model
-            net.eval()
-            b = next(iter(loader))
-            lrb = b["lr"][: args.eval_pairs].to(device)
-            hrb = b["hr"][: args.eval_pairs].to(device)
-            lr_up = F.interpolate(lrb, size=hrb.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
-            with torch.no_grad():
-                zc = encode(vae, lr_up, vinfo, sample=False)
-                if is_flow:
-                    z = sample_flow(
-                        net,
-                        (zc.shape[0], vinfo.latent_channels, lat, lat),
-                        cond=zc,
-                        steps=args.eval_steps,
-                        solver="heun",
-                        device=device,
-                        seed=args.seed,
-                    )
-                else:
-                    z = zc + net(zc, t_zeros.expand(zc.shape[0]))
-                rec = decode(vae, z, vinfo)
-                ps = [psnr01(rec[i : i + 1], hrb[i : i + 1]) for i in range(rec.shape[0])]
-                ss = [ssim01(rec[i : i + 1], hrb[i : i + 1]) for i in range(rec.shape[0])]
-            ev = {"psnr01": float(sum(ps) / len(ps)), "ssim01": float(sum(ss) / len(ss)), "n": len(ps)}
-            print(
-                f"  EVAL {step+1}: RGB01 {ev['psnr01']:.2f}/{ev['ssim01']:.4f} n={ev['n']}",
-                flush=True,
+            psnr, ssim = run_val(
+                net, val_ds, vae, vinfo, device, args.objective,
+                max(1, args.val_eval_steps), args.val_pairs, args.seed,
             )
-            with (out / "eval_log.jsonl").open("a") as f:
-                f.write(json.dumps({"step": step + 1, **ev}) + "\n")
-            if ev["psnr01"] > best:
-                best = ev["psnr01"]
+            print(f"  VAL {step+1}: Y {psnr:.3f}/{ssim:.4f} n={min(len(val_ds), args.val_pairs)}", flush=True)
+            with (out / "val_log.jsonl").open("a") as f:
+                f.write(json.dumps({"step": step + 1, "psnr_y": psnr, "ssim_y": ssim}) + "\n")
+            if psnr > best:
+                best = psnr
+                no_gain = 0
                 torch.save(save_payload(args, model, ema, step + 1, best, lat, in_ch, vinfo), out / "ckpt_best.pt")
-            model.train()
+            else:
+                no_gain += 1
+            if no_gain >= args.patience and step + 1 >= args.min_steps:
+                print(f"  EARLY STOP at {step+1} (no val gain for {args.patience} evals)", flush=True)
+                torch.save(save_payload(args, model, ema, step + 1, best, lat, in_ch, vinfo), out / "ckpt_last.pt")
+                stopped = True
 
-        if (step + 1) % args.save_every == 0 or step == args.steps - 1:
+        if (step + 1) % args.save_every == 0:
             torch.save(save_payload(args, model, ema, step + 1, best, lat, in_ch, vinfo), out / "ckpt_last.pt")
+        if stopped:
+            break
         step += 1
 
-    print(f"done best_psnr01={best:.2f} → {out}", flush=True)
+    if not stopped:
+        torch.save(save_payload(args, model, ema, step, best, lat, in_ch, vinfo), out / "ckpt_last.pt")
+    print(f"done best_val_Y={best:.3f} -> {out}", flush=True)
 
 
 def save_payload(args, model, ema, step, best, lat, in_ch, vinfo):
@@ -277,6 +308,7 @@ def save_payload(args, model, ema, step, best, lat, in_ch, vinfo):
         "latent_size": lat,
         "in_channels": in_ch,
         "hr_px": args.lr_patch * args.scale,
+        "best_psnr_y": best,
         "best_psnr01": best,
     }
 

@@ -87,7 +87,7 @@ def recon_tile(vae, info, img_u8: np.ndarray, tile: int = 256, pad: int = 16, de
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--data-root", default=r"G:\RealSR\data\RealSR(V3)")
+    p.add_argument("--data-root", default="", help="auto-detected if empty")
     p.add_argument("--vae", default="flux1-dev", help="preset name or local/HF path")
     p.add_argument("--cameras", default="Canon,Nikon")
     p.add_argument("--scale", type=int, default=2)
@@ -97,6 +97,8 @@ def main():
     p.add_argument("--out", default=r"G:\RealSR\experiments\diffusion\vae_noise")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
+    if not getattr(args, "data_root", ""):
+        args.data_root = default_root()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
