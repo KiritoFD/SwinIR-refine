@@ -15,7 +15,12 @@ class VAEInfo:
     downscale: int
     latent_channels: int
     scaling_factor: float
+    shift_factor: float
     source: str
+
+    @property
+    def norm_tag(self) -> str:
+        return f"x{self.downscale}-c{self.latent_channels}-s{self.scaling_factor:g}-b{self.shift_factor:g}"
 
 
 # Built-in presets. HF ids download on first use if network allows.
@@ -48,17 +53,20 @@ PRESETS: dict[str, dict] = {
         "scaling_factor": 0.13025,
     },
     # Public FLUX VAE mirrors (BFL repos often gated; these are open)
+    # Flux latents are NOT zero-mean: z_norm = (z - 0.1159) * 0.3611
     "flux1-vae": {
         "hf": "diffusers/FLUX.1-vae",
         "downscale": 8,
         "latent_channels": 16,
         "scaling_factor": 0.3611,
+        "shift_factor": 0.1159,
     },
     "flux2-vae": {
         "hf": "unsloth/FLUX.2-VAE",
         "downscale": 8,
         "latent_channels": 16,
         "scaling_factor": 0.3611,
+        "shift_factor": 0.1159,
     },
     # FLUX.1 / SD3 lineage: f8, 16 latent channels
     "flux1-dev": {
@@ -67,6 +75,7 @@ PRESETS: dict[str, dict] = {
         "downscale": 8,
         "latent_channels": 16,
         "scaling_factor": 0.3611,
+        "shift_factor": 0.1159,
     },
     "flux1-schnell": {
         "hf": "black-forest-labs/FLUX.1-schnell",
@@ -74,6 +83,7 @@ PRESETS: dict[str, dict] = {
         "downscale": 8,
         "latent_channels": 16,
         "scaling_factor": 0.3611,
+        "shift_factor": 0.1159,
     },
     # SD3 medium VAE (same family as Flux, often easier to pull)
     "sd3-vae": {
@@ -82,6 +92,7 @@ PRESETS: dict[str, dict] = {
         "downscale": 8,
         "latent_channels": 16,
         "scaling_factor": 1.5305,
+        "shift_factor": 0.0,
     },
 }
 
@@ -94,6 +105,9 @@ def load_vae(
     """Load AutoencoderKL from preset name or local/HF path.
 
     Returns (vae, VAEInfo). VAE is in eval mode, no grad.
+    Numbers that actually matter (downscale / latent_channels / scaling_factor /
+    shift_factor) are taken from the model's own ``config.json`` whenever it
+    provides them; the preset table is only a fallback for offline guesses.
     """
     from diffusers import AutoencoderKL
 
@@ -111,25 +125,36 @@ def load_vae(
                 f"Failed to load VAE preset '{name_or_path}' from {src}: {e}\n"
                 f"Pass a local directory to --vae if weights are already on disk."
             ) from e
+        c = vae.config
         info = VAEInfo(
             name=name_or_path,
             downscale=int(cfg["downscale"]),
             latent_channels=int(cfg["latent_channels"]),
             scaling_factor=float(cfg["scaling_factor"]),
+            shift_factor=float(cfg.get("shift_factor", 0.0)),
             source=src,
         )
     else:
         vae = AutoencoderKL.from_pretrained(name_or_path, torch_dtype=dtype)
-        ds = 2 ** (len(vae.config.block_out_channels) - 1)
-        lc = int(vae.config.latent_channels)
-        sf = float(getattr(vae.config, "scaling_factor", 0.18215))
+        c = vae.config
         info = VAEInfo(
             name=name_or_path,
-            downscale=int(ds),
-            latent_channels=lc,
-            scaling_factor=sf,
+            downscale=int(2 ** (len(c.block_out_channels) - 1)),
+            latent_channels=int(c.latent_channels),
+            scaling_factor=float(getattr(c, "scaling_factor", 0.18215)),
+            shift_factor=float(getattr(c, "shift_factor", 0.0)),
             source=name_or_path,
         )
+
+    # config.json wins over the preset table (it is what the weights were trained with)
+    if getattr(c, "latent_channels", None) is not None:
+        info.latent_channels = int(c.latent_channels)
+    if getattr(c, "block_out_channels", None):
+        info.downscale = int(2 ** (len(c.block_out_channels) - 1))
+    if getattr(c, "scaling_factor", None) is not None:
+        info.scaling_factor = float(c.scaling_factor)
+    if getattr(c, "shift_factor", None) is not None:
+        info.shift_factor = float(c.shift_factor)
 
     vae = vae.to(device)
     vae.eval()
@@ -140,17 +165,31 @@ def load_vae(
 
 @torch.no_grad()
 def encode(vae, x: torch.Tensor, info: VAEInfo, sample: bool = False) -> torch.Tensor:
-    """x: (B,3,H,W) in [0,1] → latent (B,C,h,w), already * scaling_factor."""
+    """x: (B,3,H,W) in [0,1] → normalized latent (z - shift) * scale.
+
+    Normalized latent is ~(0,1) for SD/SDXL and ~N(0, ~1) for Flux once the
+    0.1159 shift is removed — this is what makes flow matching well conditioned.
+    """
     x = x * 2.0 - 1.0
     posterior = vae.encode(x).latent_dist
     z = posterior.sample() if sample else posterior.mode()
-    return z * info.scaling_factor
+    return (z - info.shift_factor) * info.scaling_factor
 
 
 @torch.no_grad()
 def decode(vae, z: torch.Tensor, info: VAEInfo) -> torch.Tensor:
-    """latent → (B,3,H,W) in [0,1]."""
-    z = z / info.scaling_factor
+    """normalized latent → (B,3,H,W) in [0,1]."""
+    z = z / info.scaling_factor + info.shift_factor
+    x = vae.decode(z).sample
+    return ((x + 1.0) * 0.5).clamp(0, 1)
+
+
+def decode_grad(vae, z: torch.Tensor, info: VAEInfo) -> torch.Tensor:
+    """Same as decode() but differentiable w.r.t. z (VAE params stay frozen).
+
+    Used only when --pixel-loss-weight > 0. Costs VAE-decoder activations.
+    """
+    z = z / info.scaling_factor + info.shift_factor
     x = vae.decode(z).sample
     return ((x + 1.0) * 0.5).clamp(0, 1)
 

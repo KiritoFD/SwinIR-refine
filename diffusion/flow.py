@@ -53,8 +53,15 @@ def sample_flow(
     shift: float = 1.0,
     device: str | torch.device = "cuda",
     generator: torch.Generator | None = None,
+    seed: int | None = None,
 ):
-    """Integrate ODE from t=1 (noise) to t=0 (data). Returns x0."""
+    """Integrate ODE from t=1 (noise) to t=0 (data). Returns x0.
+
+    Pass ``seed`` for a reproducible run (the same seed gives the same initial
+    noise every tile/step, which removes sampling variance from the PSNR number).
+    """
+    if generator is None and seed is not None:
+        generator = torch.Generator(device=device).manual_seed(int(seed))
     x = torch.randn(shape, device=device, generator=generator)
     ts = torch.linspace(1.0, 0.0, steps + 1, device=device)
     if shift != 1.0:

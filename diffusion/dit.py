@@ -213,9 +213,11 @@ class DiT(nn.Module):
 
         self.x_embedder = PatchEmbed(patch_size, in_channels, hidden_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
+        # Kept only so older ckpts keep loading; position comes from RoPE, so it
+        # stays zero and is never added. That is what lets one ckpt run on any
+        # token grid (training crop vs. padded inference tile).
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, hidden_size), requires_grad=False)
-        self.register_buffer("_pos_ready", torch.tensor(0.0), persistent=False)
-        self._init_pos()
+        nn.init.zeros_(self.pos_embed)
 
         self.blocks = nn.ModuleList(
             [
@@ -225,27 +227,28 @@ class DiT(nn.Module):
         )
         self.final = FinalLayer(hidden_size, patch_size, in_channels)
 
-    def _init_pos(self):
-        # zero pos if using RoPE; keep buffer for compatibility
-        nn.init.zeros_(self.pos_embed)
-
     def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
         c = self.in_channels
         p = self.patch_size
-        g = self.grid
+        g = int(round(math.sqrt(x.shape[1])))
+        assert g * g == x.shape[1], f"non-square token grid {x.shape[1]}"
         x = x.reshape(x.shape[0], g, g, p, p, c)
         x = torch.einsum("nhwpqc->nchpwq", x)
         return x.reshape(x.shape[0], c, g * p, g * p)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """x: (B, C, H, W); t: (B,) in [0,1000] scaled by caller or raw [0,1]*1000."""
-        tokens = self.x_embedder(x) + self.pos_embed
+        """x: (B, C, H, W) at ANY size divisible by patch_size; t: (B,)."""
+        tokens = self.x_embedder(x)
+        grid = int(round(math.sqrt(tokens.shape[1])))
+        assert grid * grid == tokens.shape[1], (
+            f"input {tuple(x.shape[-2:])} -> {tokens.shape[1]} tokens is not a square grid"
+        )
         c = self.t_embedder(t)
         for blk in self.blocks:
             if self.use_checkpoint and self.training:
-                tokens = checkpoint(blk, tokens, c, self.grid, use_reentrant=False)
+                tokens = checkpoint(blk, tokens, c, grid, use_reentrant=False)
             else:
-                tokens = blk(tokens, c, self.grid)
+                tokens = blk(tokens, c, grid)
         tokens = self.final(tokens, c)
         return self.unpatchify(tokens)
 
