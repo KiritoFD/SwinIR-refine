@@ -170,18 +170,21 @@ def encode(vae, x: torch.Tensor, info: VAEInfo, sample: bool = False) -> torch.T
     Normalized latent is ~(0,1) for SD/SDXL and ~N(0, ~1) for Flux once the
     0.1159 shift is removed — this is what makes flow matching well conditioned.
     """
-    x = x * 2.0 - 1.0
+    dtype = next(vae.parameters()).dtype
+    x = x.to(dtype) * 2.0 - 1.0
     posterior = vae.encode(x).latent_dist
     z = posterior.sample() if sample else posterior.mode()
-    return (z - info.shift_factor) * info.scaling_factor
+    # always hand back fp32: the VAE may be bf16 for speed, the model/loss is not
+    return ((z - info.shift_factor) * info.scaling_factor).float()
 
 
 @torch.no_grad()
 def decode(vae, z: torch.Tensor, info: VAEInfo) -> torch.Tensor:
-    """normalized latent → (B,3,H,W) in [0,1]."""
-    z = z / info.scaling_factor + info.shift_factor
+    """normalized latent → (B,3,H,W) fp32 in [0,1]."""
+    dtype = next(vae.parameters()).dtype
+    z = (z / info.scaling_factor + info.shift_factor).to(dtype)
     x = vae.decode(z).sample
-    return ((x + 1.0) * 0.5).clamp(0, 1)
+    return ((x.float() + 1.0) * 0.5).clamp(0, 1)
 
 
 def decode_grad(vae, z: torch.Tensor, info: VAEInfo) -> torch.Tensor:
@@ -189,9 +192,10 @@ def decode_grad(vae, z: torch.Tensor, info: VAEInfo) -> torch.Tensor:
 
     Used only when --pixel-loss-weight > 0. Costs VAE-decoder activations.
     """
-    z = z / info.scaling_factor + info.shift_factor
+    dtype = next(vae.parameters()).dtype
+    z = (z / info.scaling_factor + info.shift_factor).to(dtype)
     x = vae.decode(z).sample
-    return ((x + 1.0) * 0.5).clamp(0, 1)
+    return ((x.float() + 1.0) * 0.5).clamp(0, 1)
 
 
 def psnr01(a: torch.Tensor, b: torch.Tensor) -> float:

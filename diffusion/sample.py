@@ -9,6 +9,7 @@ import torch
 from PIL import Image
 
 from .data import build_index
+from .data import default_root
 from .dit import build_dit
 from .eval_official import sr_latent_tiled, sr_pixel_tiled
 from .vae import load_vae
@@ -17,7 +18,7 @@ from .vae import load_vae
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", required=True)
-    p.add_argument("--data-root", default=r"G:\RealSR\data\RealSR(V3)")
+    p.add_argument("--data-root", default="", help="auto-detected if empty")
     p.add_argument("--vae", default="")
     p.add_argument("--mode", default="auto", choices=["auto", "latent", "pixel"])
     p.add_argument("--objective", default="auto", choices=["auto", "flow", "reg"])
@@ -29,6 +30,8 @@ def main():
     p.add_argument("--out", default="")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
+    if not getattr(args, "data_root", ""):
+        args.data_root = default_root()
 
     device = torch.device(args.device)
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
