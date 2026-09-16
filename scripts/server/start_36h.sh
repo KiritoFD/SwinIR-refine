@@ -11,7 +11,7 @@ ROOT="${ROOT:-/home/ds/realsr}"
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux not found; running in foreground with nohup instead"
-  cd "$ROOT" && nohup bash scripts/server/run_36h.sh > experiments/diffusion/run36h.log 2>&1 &
+  cd "$ROOT" && nohup bash scripts/server/${RUN:-run_36h.sh} > experiments/diffusion/${RUNLOG:-run36h.log} 2>&1 &
   echo "started pid $! -> $ROOT/experiments/diffusion/run36h.log"
   exit 0
 fi
@@ -24,8 +24,8 @@ if tmux has-session -t "$SESS" 2>/dev/null; then
   exit 0
 fi
 
-tmux new-session -d -s "$SESS" "cd $ROOT && bash scripts/server/run_36h.sh 2>&1 | tee experiments/diffusion/run36h.log"
+tmux new-session -d -s "$SESS" "cd $ROOT && bash scripts/server/${RUN:-run_36h.sh} 2>&1 | tee experiments/diffusion/${RUNLOG:-run36h.log}"
 echo "started tmux session '$SESS'"
 echo "  watch:   tmux attach -t $SESS"
 echo "  detach:  Ctrl-b then d"
-echo "  tail:    tail -f $ROOT/experiments/diffusion/run36h.log"
+echo "  tail:    tail -f $ROOT/experiments/diffusion/${RUNLOG:-run36h.log}"
