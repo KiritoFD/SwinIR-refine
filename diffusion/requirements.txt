@@ -1,0 +1,10 @@
+# RealSR diffusion line server deps
+torch>=2.1
+torchvision
+numpy
+pillow
+diffusers>=0.30
+transformers
+accelerate
+safetensors
+huggingface_hub
