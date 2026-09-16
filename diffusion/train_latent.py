@@ -1,13 +1,29 @@
-"""Train latent DiT for RealSR ×2 (condition on LR-up latent). Flow matching.
+"""Train latent DiT for RealSR x2 (condition on bicubic-up LR latent).
 
-Example:
-  python -m diffusion.train_latent --vae flux1-dev --size S --steps 20000 \
-    --lr-patch 64 --batch 16 --out experiments/diffusion/latent_dit_flux
+Two objectives, same backbone, same data, same crop size — this is the
+"latent" half of the 2x2 diffusion matrix:
+
+* ``flow``  : rectified flow matching (logit-normal t, Heun ODE at eval).
+              Stochastic, needs N integration steps.
+* ``reg``   : deterministic residual regressor in latent space,
+              z0_hat = z_cond + f(z_cond) with a zero-initialised final layer
+              (starts as "identity = bicubic"). This is the PSNR-optimal arm:
+              it directly predicts the conditional mean instead of sampling it.
+
+Example (server 48G):
+  python -m diffusion.train_latent --objective flow --vae flux1-vae \
+    --lr-patch 128 --batch 32 --steps 20000 --amp \
+    --out experiments/diffusion/latent_flow
+
+  python -m diffusion.train_latent --objective reg --vae flux1-vae \
+    --lr-patch 128 --batch 32 --steps 20000 --amp \
+    --out experiments/diffusion/latent_reg
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import time
@@ -20,37 +36,46 @@ from torch.utils.data import DataLoader
 from .data import RealSRCropDataset
 from .dit import build_dit
 from .flow import flow_loss, sample_flow
-from .vae import decode, encode, load_vae, psnr01, ssim01
+from .vae import decode, decode_grad, encode, load_vae, psnr01, ssim01
 
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--data-root", default=r"G:\RealSR\data\RealSR(V3)")
     p.add_argument("--out", default=r"G:\RealSR\experiments\diffusion\latent_dit")
-    p.add_argument("--vae", default="flux1-dev")
+    p.add_argument("--objective", default="flow", choices=["flow", "reg"])
+    p.add_argument("--vae", default="flux1-vae")
+    p.add_argument("--vae-dtype", default="fp32", choices=["fp32", "fp16", "bf16"])
     p.add_argument("--size", default="S", choices=["S", "M", "B"])
     p.add_argument("--patch", type=int, default=2)
     p.add_argument("--hidden", type=int, default=0, help="0 = model default")
     p.add_argument("--depth", type=int, default=0)
     p.add_argument("--heads", type=int, default=0)
     p.add_argument("--scale", type=int, default=2)
-    p.add_argument("--lr-patch", type=int, default=64)
-    p.add_argument("--batch", type=int, default=16)
+    # HR crop = lr_patch * scale. Keep it equal to the eval HR tile so train and
+    # inference see the same token grid. 128 -> HR256 -> latent 32x32 (f8).
+    p.add_argument("--lr-patch", type=int, default=128)
+    p.add_argument("--batch", type=int, default=32)
     p.add_argument("--steps", type=int, default=20000)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup", type=int, default=500)
     p.add_argument("--weight-decay", type=float, default=0.0)
     p.add_argument("--t-sampler", default="logit_normal", choices=["logit_normal", "uniform", "cosmap"])
-    p.add_argument("--ema", type=float, default=0.9999)
+    p.add_argument("--ema", type=float, default=0.999, help="0 disables; 0.999 fits 20k steps")
     p.add_argument("--grad-ckpt", action="store_true")
     p.add_argument("--amp", action="store_true")
-    p.add_argument("--sample-hr", type=int, default=1, help="encode latent from mode (0) or sample (1)")
+    # deterministic target: use the posterior mode, never sample the HR latent.
+    p.add_argument("--sample-hr", type=int, default=0)
+    p.add_argument("--reg-loss", default="l1", choices=["l1", "l2", "smoothl1"])
+    p.add_argument("--pixel-loss-weight", type=float, default=0.0,
+                   help="reg only: add L1 on decoded pixels (grad flows through frozen VAE)")
     p.add_argument("--eval-every", type=int, default=1000)
     p.add_argument("--eval-pairs", type=int, default=4)
-    p.add_argument("--eval-steps", type=int, default=20)
+    p.add_argument("--eval-steps", type=int, default=20, help="flow only: ODE steps")
     p.add_argument("--save-every", type=int, default=2000)
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--resume", default="")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return p.parse_args()
 
@@ -68,8 +93,10 @@ def main():
     device = torch.device(args.device)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    (out / "args.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
 
-    vae, vinfo = load_vae(args.vae, device=device, dtype=torch.float32)
+    vae_dtype = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}[args.vae_dtype]
+    vae, vinfo = load_vae(args.vae, device=device, dtype=vae_dtype)
     ds = RealSRCropDataset(
         args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True, None
     )
@@ -81,11 +108,11 @@ def main():
         pin_memory=True,
         drop_last=True,
     )
-    # HR size = lr_patch * scale; latent size = hr / vae.downscale
     hr_px = args.lr_patch * args.scale
     assert hr_px % vinfo.downscale == 0, f"HR {hr_px} not divisible by VAE ds {vinfo.downscale}"
     lat = hr_px // vinfo.downscale
-    in_ch = 2 * vinfo.latent_channels  # x_t || cond_lr_latent
+    is_flow = args.objective == "flow"
+    in_ch = 2 * vinfo.latent_channels if is_flow else vinfo.latent_channels
     kw = {"input_size": lat, "patch_size": args.patch, "in_channels": in_ch, "use_checkpoint": args.grad_ckpt}
     if args.hidden:
         kw["hidden_size"] = args.hidden
@@ -96,8 +123,9 @@ def main():
     model = build_dit(args.size, **kw).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(
-        f"LatentDiT-{args.size} {n_params:.2f}M  latent {lat}x{lat}x{vinfo.latent_channels} "
-        f"in_ch={in_ch}  VAE={vinfo.name}  pairs={len(ds)}",
+        f"LatentDiT-{args.size} {n_params:.2f}M  objective={args.objective}  "
+        f"HR={hr_px} latent {lat}x{lat}x{vinfo.latent_channels} in_ch={in_ch}  "
+        f"VAE={vinfo.name}[{vinfo.norm_tag}]  pairs={len(ds)}",
         flush=True,
     )
 
@@ -105,8 +133,6 @@ def main():
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp)
     ema = None
     if args.ema > 0:
-        import copy
-
         ema = copy.deepcopy(model).eval()
         for p_ in ema.parameters():
             p_.requires_grad_(False)
@@ -120,6 +146,35 @@ def main():
 
     step = 0
     best = -1.0
+    if args.resume and Path(args.resume).is_file():
+        ck = torch.load(args.resume, map_location="cpu", weights_only=False)
+        model.load_state_dict(ck["model"])
+        if ema is not None and "ema" in ck:
+            ema.load_state_dict(ck["ema"])
+        step = int(ck.get("step", 0))
+        best = float(ck.get("best_psnr01", -1.0))
+        print(f"resumed from {args.resume} step={step} best={best:.3f}", flush=True)
+
+    amp_dtype = torch.bfloat16 if args.amp else torch.float32
+    t_zeros = torch.zeros(1, device=device)
+
+    def forward_loss(z0, zc, hr):
+        """z0/zc are normalized latents; hr is the rgb target in [0,1] (reg+pixel-loss only)."""
+        if is_flow:
+            return flow_loss(model, z0, zc, t_mode=args.t_sampler)[0]
+        res = model(zc, t_zeros.expand(zc.shape[0]))
+        z0_hat = zc + res
+        if args.reg_loss == "l2":
+            loss = F.mse_loss(z0_hat, z0)
+        elif args.reg_loss == "smoothl1":
+            loss = F.smooth_l1_loss(z0_hat, z0)
+        else:
+            loss = F.l1_loss(z0_hat, z0)
+        if args.pixel_loss_weight > 0:
+            rec = decode_grad(vae, z0_hat, vinfo)
+            loss = loss + args.pixel_loss_weight * F.l1_loss(rec, hr)
+        return loss
+
     t0 = time.time()
     it = iter(loader)
     model.train()
@@ -140,8 +195,8 @@ def main():
             z0 = encode(vae, hr, vinfo, sample=bool(args.sample_hr))
             zc = encode(vae, lr_up, vinfo, sample=False)
 
-        with torch.amp.autocast("cuda", enabled=args.amp, dtype=torch.bfloat16 if args.amp else torch.float32):
-            loss, _ = flow_loss(model, z0, zc, t_mode=args.t_sampler)
+        with torch.amp.autocast("cuda", enabled=args.amp, dtype=amp_dtype):
+            loss = forward_loss(z0, zc, hr)
         if not torch.isfinite(loss):
             opt.zero_grad(set_to_none=True)
             step += 1
@@ -167,21 +222,24 @@ def main():
         if args.eval_every > 0 and ((step + 1) % args.eval_every == 0 or step == args.steps - 1):
             net = ema if ema is not None else model
             net.eval()
-            # short ODE sample conditioned on bicubic-up LR
             b = next(iter(loader))
             lrb = b["lr"][: args.eval_pairs].to(device)
             hrb = b["hr"][: args.eval_pairs].to(device)
             lr_up = F.interpolate(lrb, size=hrb.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
             with torch.no_grad():
                 zc = encode(vae, lr_up, vinfo, sample=False)
-                z = sample_flow(
-                    net,
-                    (zc.shape[0], vinfo.latent_channels, lat, lat),
-                    cond=zc,
-                    steps=args.eval_steps,
-                    solver="heun",
-                    device=device,
-                )
+                if is_flow:
+                    z = sample_flow(
+                        net,
+                        (zc.shape[0], vinfo.latent_channels, lat, lat),
+                        cond=zc,
+                        steps=args.eval_steps,
+                        solver="heun",
+                        device=device,
+                        seed=args.seed,
+                    )
+                else:
+                    z = zc + net(zc, t_zeros.expand(zc.shape[0]))
                 rec = decode(vae, z, vinfo)
                 ps = [psnr01(rec[i : i + 1], hrb[i : i + 1]) for i in range(rec.shape[0])]
                 ss = [ssim01(rec[i : i + 1], hrb[i : i + 1]) for i in range(rec.shape[0])]
@@ -194,36 +252,33 @@ def main():
                 f.write(json.dumps({"step": step + 1, **ev}) + "\n")
             if ev["psnr01"] > best:
                 best = ev["psnr01"]
-                torch.save(
-                    {
-                        "step": step + 1,
-                        "model": (ema if ema is not None else model).state_dict(),
-                        "args": vars(args),
-                        "vae": vinfo.name,
-                        "latent_size": lat,
-                        "in_channels": in_ch,
-                        "best_psnr01": best,
-                    },
-                    out / "ckpt_best.pt",
-                )
+                torch.save(save_payload(args, model, ema, step + 1, best, lat, in_ch, vinfo), out / "ckpt_best.pt")
             model.train()
 
         if (step + 1) % args.save_every == 0 or step == args.steps - 1:
-            torch.save(
-                {
-                    "step": step + 1,
-                    "model": (ema if ema is not None else model).state_dict(),
-                    "args": vars(args),
-                    "vae": vinfo.name,
-                    "latent_size": lat,
-                    "in_channels": in_ch,
-                    "best_psnr01": best,
-                },
-                out / "ckpt_last.pt",
-            )
+            torch.save(save_payload(args, model, ema, step + 1, best, lat, in_ch, vinfo), out / "ckpt_last.pt")
         step += 1
 
     print(f"done best_psnr01={best:.2f} → {out}", flush=True)
+
+
+def save_payload(args, model, ema, step, best, lat, in_ch, vinfo):
+    net = ema if ema is not None else model
+    return {
+        "step": step,
+        "model": net.state_dict(),
+        "ema": ema.state_dict() if ema is not None else None,
+        "args": vars(args),
+        "objective": args.objective,
+        "mode": "latent",
+        "vae": vinfo.name,
+        "vae_shift_factor": vinfo.shift_factor,
+        "vae_scaling_factor": vinfo.scaling_factor,
+        "latent_size": lat,
+        "in_channels": in_ch,
+        "hr_px": args.lr_patch * args.scale,
+        "best_psnr01": best,
+    }
 
 
 if __name__ == "__main__":
