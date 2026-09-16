@@ -21,8 +21,8 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from diffusion.metrics import official_pair_metrics  # noqa: E402
 from diffusion.vae import decode, encode, load_vae, psnr01, ssim01  # noqa: E402
-from model.metrics import official_pair_metrics  # noqa: E402
 
 
 def to_tensor(u8: np.ndarray) -> torch.Tensor:
