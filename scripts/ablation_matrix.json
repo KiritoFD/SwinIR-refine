@@ -1,0 +1,271 @@
+{
+  "protocol": "RealSR V3 Test.m official full-set (n=100, Y limited-range uint8, crop=0, modcrop=4)",
+  "data_root": "G:\\RealSR\\data\\RealSR(V3)",
+  "scale": 2,
+  "baseline": "E11_align",
+  "runs": [
+    {
+      "id": "E11_align",
+      "role": "production",
+      "factor": "full_recipe",
+      "ckpt": "experiments/improve/E11_align_loss/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": true,
+        "ema": 0.999,
+        "steps": 12000,
+        "batch_size": 8,
+        "lr": 2e-4,
+        "amp": true,
+        "l1_only": true
+      },
+      "note": "Align-L1 + EMA + 12k，当前最优生产配方"
+    },
+    {
+      "id": "E9_no_align",
+      "role": "ablation",
+      "factor": "align",
+      "ckpt": "experiments/improve/E9_v2_long12k/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": false,
+        "ema": 0.999,
+        "steps": 12000,
+        "batch_size": 8,
+        "lr": 2e-4,
+        "amp": true,
+        "l1_only": true
+      },
+      "note": "同 E11 但关 Align → 隔离 Align 增量"
+    },
+    {
+      "id": "A0_no_ema",
+      "role": "ablation",
+      "factor": "ema",
+      "ckpt": "experiments/ablation_x2/A0_l1_only/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": false,
+        "ema": 0.0,
+        "steps": 6000,
+        "batch_size": 8,
+        "lr": 2e-4,
+        "amp": true
+      },
+      "note": "6k 无 EMA 无 Align"
+    },
+    {
+      "id": "A1_ema",
+      "role": "ablation",
+      "factor": "ema",
+      "ckpt": "experiments/ablation_x2/A1_l1_ema/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": false,
+        "ema": 0.999,
+        "steps": 6000,
+        "batch_size": 8,
+        "lr": 2e-4,
+        "amp": true
+      },
+      "note": "6k 有 EMA 无 Align；A1−A0 = EMA 增量"
+    },
+    {
+      "id": "A2_patchamp",
+      "role": "ablation",
+      "factor": "patch_amp",
+      "ckpt": "experiments/ablation_x2/A2_l1_ema_patchamp/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": false,
+        "ema": 0.999,
+        "steps": 6000
+      },
+      "note": "A1 + patch amp loss"
+    },
+    {
+      "id": "A3_hfconf",
+      "role": "ablation",
+      "factor": "hf_conf",
+      "ckpt": "experiments/ablation_x2/A3_l1_ema_hfconf/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": false,
+        "ema": 0.999,
+        "steps": 6000
+      },
+      "note": "A1 + conf-weighted HF"
+    },
+    {
+      "id": "A4_full_aux",
+      "role": "ablation",
+      "factor": "aux_losses",
+      "ckpt": "experiments/ablation_x2/A4_full/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": false,
+        "ema": 0.999,
+        "steps": 6000
+      },
+      "note": "多辅助损失全开（历史 A 线）"
+    },
+    {
+      "id": "E10_realsr_loss",
+      "role": "variant",
+      "factor": "loss",
+      "ckpt": "experiments/improve/E10_realsr_loss_15k/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "steps": 15000
+      },
+      "note": "RealSR paper loss 变体 15k"
+    },
+    {
+      "id": "E12_lpkpn",
+      "role": "variant",
+      "factor": "head",
+      "ckpt": "experiments/improve/E12_align_lpkpn/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": true,
+        "ema": 0.999,
+        "steps": 12000
+      },
+      "note": "E11 + LP-KPN 残差头"
+    },
+    {
+      "id": "E13_wiener",
+      "role": "negative",
+      "factor": "head",
+      "ckpt": "experiments/improve/E13_align_wiener/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": true,
+        "ema": 0.999
+      },
+      "note": "Wiener FFT 带通（负结果）"
+    },
+    {
+      "id": "E14_ampphase",
+      "role": "negative",
+      "factor": "head",
+      "ckpt": "experiments/improve/E14_align_ampphase/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": true,
+        "ema": 0.999
+      },
+      "note": "AmpPhase 头（负结果）"
+    },
+    {
+      "id": "E15_radialpsf",
+      "role": "negative",
+      "factor": "head",
+      "ckpt": "experiments/improve/E15_align_radialpsf/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": true,
+        "ema": 0.999
+      },
+      "note": "RadialPSF 门控（负结果）"
+    },
+    {
+      "id": "E7_v2_l1_amp_ema",
+      "role": "intermediate",
+      "factor": "schedule",
+      "ckpt": "experiments/improve/E7_mod_v2_l1_amp_ema/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": false,
+        "ema": 0.999,
+        "steps": 5000
+      },
+      "note": "v2 L1+amp+EMA @5k 中间点"
+    },
+    {
+      "id": "E8_v2_kpn",
+      "role": "intermediate",
+      "factor": "head",
+      "ckpt": "experiments/improve/E8_v2_kpn/ckpt_best.pt",
+      "train": {
+        "optimizer": "adamw",
+        "align": false,
+        "ema": 0.999,
+        "steps": 5000
+      },
+      "note": "v2 + KPN @5k 中间点"
+    },
+    {
+      "id": "E11c_muon",
+      "role": "ablation",
+      "factor": "optimizer",
+      "ckpt": "experiments/improve/E11c_muon/ckpt_best.pt",
+      "train": {
+        "optimizer": "muon",
+        "align": true,
+        "ema": 0.999,
+        "steps": 12000,
+        "batch_size": 4,
+        "grad_accum": 2,
+        "lr": 1e-3,
+        "amp": false
+      },
+      "note": "E11 同配方换 Muon；需先训完",
+      "requires_train": true
+    },
+    {
+      "id": "E2_swinir_capmatch",
+      "role": "baseline",
+      "factor": "arch",
+      "ckpt": "experiments/matrix_x2/E2_swinir_capmatch/ckpt_best.pt",
+      "train": {
+        "arch": "swinir",
+        "model_size": "largeish"
+      },
+      "note": "官方结构容量对照"
+    },
+    {
+      "id": "E1_swinir_light",
+      "role": "baseline",
+      "factor": "arch",
+      "ckpt": "experiments/matrix_x2/E1_swinir_light/ckpt_best.pt",
+      "train": {
+        "arch": "swinir",
+        "model_size": "light"
+      },
+      "note": "SwinIR-light"
+    }
+  ],
+  "comparisons": [
+    {
+      "name": "align_gain",
+      "with": "E11_align",
+      "without": "E9_no_align",
+      "expect": "+0.4~0.6 dB Y"
+    },
+    {
+      "name": "ema_gain_6k",
+      "with": "A1_ema",
+      "without": "A0_no_ema",
+      "expect": "≈0 @6k"
+    },
+    {
+      "name": "muon_vs_adamw",
+      "with": "E11c_muon",
+      "without": "E11_align",
+      "expect": "unknown"
+    },
+    {
+      "name": "lpkpn_vs_align",
+      "with": "E12_lpkpn",
+      "without": "E11_align",
+      "expect": "≈0 or negative"
+    },
+    {
+      "name": "vs_swinir_capmatch",
+      "with": "E11_align",
+      "without": "E2_swinir_capmatch",
+      "expect": "+0.4~0.6 dB Y"
+    }
+  ]
+}
