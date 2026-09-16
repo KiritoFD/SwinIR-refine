@@ -41,6 +41,25 @@ PRESETS: dict[str, dict] = {
         "scaling_factor": 0.1268,  # approximate; override via --scaling-factor if local
         "note": "Use local path if you have Stability kl-f4 weights",
     },
+    "sdxl-vae": {
+        "hf": "madebyollin/sdxl-vae-fp16-fix",
+        "downscale": 8,
+        "latent_channels": 4,
+        "scaling_factor": 0.13025,
+    },
+    # Public FLUX VAE mirrors (BFL repos often gated; these are open)
+    "flux1-vae": {
+        "hf": "diffusers/FLUX.1-vae",
+        "downscale": 8,
+        "latent_channels": 16,
+        "scaling_factor": 0.3611,
+    },
+    "flux2-vae": {
+        "hf": "unsloth/FLUX.2-VAE",
+        "downscale": 8,
+        "latent_channels": 16,
+        "scaling_factor": 0.3611,
+    },
     # FLUX.1 / SD3 lineage: f8, 16 latent channels
     "flux1-dev": {
         "hf": "black-forest-labs/FLUX.1-dev",
