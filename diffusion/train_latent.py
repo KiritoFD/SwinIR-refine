@@ -60,6 +60,8 @@ def parse_args():
     p.add_argument("--weight-decay", type=float, default=0.0)
     p.add_argument("--t-sampler", default="logit_normal", choices=["logit_normal", "uniform", "cosmap"])
     p.add_argument("--ema", type=float, default=0.999)
+    p.add_argument("--residual", type=int, default=0,
+                   help="flow: model the latent residual (HR - bicubic_up) instead of HR")
     p.add_argument("--compile", action="store_true", help="torch.compile the training step")
     p.add_argument("--compile-mode", default="default",
                    choices=["default", "reduce-overhead", "max-autotune"])
@@ -93,7 +95,7 @@ def lr_at(step, base, warmup, total):
 
 
 @torch.no_grad()
-def run_val(net, val_ds, vae, vinfo, device, objective, steps, max_n, seed):
+def run_val(net, val_ds, vae, vinfo, device, objective, steps, max_n, seed, residual=False):
     """True Y-PSNR on held-out pairs (raw images, so each item costs a VAE pass)."""
     net.eval()
     ys, ss = [], []
@@ -108,7 +110,8 @@ def run_val(net, val_ds, vae, vinfo, device, objective, steps, max_n, seed):
         if objective == "reg":
             z = zc + net(zc, t0)
         else:
-            z = sample_flow(net, zc.shape, cond=zc, steps=steps, solver="heun", device=device, seed=seed)
+            d = sample_flow(net, zc.shape, cond=zc, steps=steps, solver="heun", device=device, seed=seed)
+            z = zc + d if residual else d
         rec = decode(vae, z, vinfo)
         sr_u8 = (rec[0].clamp(0, 1) * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
         hr_u8 = (hr[0] * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
@@ -211,7 +214,10 @@ def main():
 
     def forward_loss(z0, zc, hr):
         if is_flow:
-            return flow_loss(model, z0, zc, t_mode=args.t_sampler)[0]
+            # residual variant: model (HR_latent - bicubic_latent) so the latent
+            # flow arms match the pixel arms, which are residual by default
+            x0 = (z0 - zc) if args.residual else z0
+            return flow_loss(model, x0, zc, t_mode=args.t_sampler)[0]
         z0_hat = zc + model(zc, t_zeros.expand(zc.shape[0]))
         if args.reg_loss == "l2":
             loss = F.mse_loss(z0_hat, z0)
@@ -279,6 +285,7 @@ def main():
             psnr, ssim = run_val(
                 net, val_ds, vae, vinfo, device, args.objective,
                 max(1, args.val_eval_steps), args.val_pairs, args.seed,
+                bool(args.residual),
             )
             print(f"  VAL {step+1}: Y {psnr:.3f}/{ssim:.4f} n={min(len(val_ds), args.val_pairs)}", flush=True)
             with (out / "val_log.jsonl").open("a") as f:
