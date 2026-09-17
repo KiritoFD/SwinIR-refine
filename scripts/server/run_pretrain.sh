@@ -44,7 +44,7 @@ say "PRETRAIN data: $HR"
 # ------------------------------------------------ stage 1: synthetic pretrain
 "$PY" -m diffusion.train_pixel --data-root "$DATA" --out "$OUT/pt_pixel_reg" \
   --pretrain-root "$HR" --size "$SIZE" --objective reg --steps "$STEPS1" \
-  --lr-patch 64 --batch 28 --amp --num-workers 8 --compile \
+  --lr-patch 64 --batch 28 --amp --num-workers 16 --compile \
   --eval-every 1000 --val-pairs 16 --patience 100 --min-steps 100000 \
   --val-eval-steps 8 --save-every 5000 \
   2>&1 | tee "$LOG/pt_pixel_reg.train.log" | grep -E "PixelDiT|compile|pretrain|VAL |EARLY|Error|Traceback" | tail -40
