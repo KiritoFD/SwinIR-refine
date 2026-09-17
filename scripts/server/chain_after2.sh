@@ -55,22 +55,34 @@ done
 # An absolute wall clock, not "N hours from now" -- a relative horizon computed
 # at stage-B start is useless, because by then most of the window is already
 # gone and it would happily grant another full day.
-WALL="${WALL:-09-18 11:00}"          # 36h after the original 09-16 23:07 launch
+#
+# WALL must be a format `date -d` actually accepts.  A bare "MM-DD HH:MM" is
+# NOT one (GNU date: "invalid date") -- that mistake silently dropped STEPS1 to
+# the MINSTEPS floor on the first run of this script.  Use YYYY-MM-DD HH:MM.
+WALL="${WALL:-2026-09-18 11:00}"     # 36h after the original 09-16 23:07 launch
 RESERVE_S="${RESERVE_S:-13000}"      # ~3.6h: 16k fine-tune @0.75s + official eval
 S_PER_STEP="${S_PER_STEP:-0.90}"     # compiled pixel-S b=28, BSRGAN data on the fly
 MAXSTEPS="${STEPS1:-30000}"
 MINSTEPS="${MINSTEPS1:-8000}"
+FALLBACK_H="${FALLBACK_H:-10}"
 
 now=$(date +%s)
-wall=$(date -d "$WALL" +%s 2>/dev/null || echo 0)
-(( wall < now )) && wall=$(( now + 4 * 3600 ))
+wall=$(date -d "$WALL" +%s 2>/dev/null)
+if [[ -z "${wall:-}" ]]; then
+  wall=$(( now + FALLBACK_H * 3600 ))
+  say "WARNING: cannot parse WALL='$WALL' -- falling back to ${FALLBACK_H}h from now"
+fi
 avail=$(( wall - now ))
 budget=$(( avail - RESERVE_S ))
 steps=$(awk -v b="$budget" -v s="$S_PER_STEP" \
         'BEGIN{printf "%d", (b>0 ? b/s : 0)}')
 (( steps > MAXSTEPS )) && steps=$MAXSTEPS
 (( steps < MINSTEPS )) && steps=$MINSTEPS
-say "budget: wall=$WALL avail=${avail}s reserve=${RESERVE_S}s -> STEPS1=$steps (max $MAXSTEPS)"
+say "budget: wall=$WALL ($(date -d @$wall +'%m-%d %H:%M')) avail=${avail}s reserve=${RESERVE_S}s -> STEPS1=$steps (max $MAXSTEPS)"
+if (( steps <= MINSTEPS )); then
+  say "WARNING: STEPS1 hit the ${MINSTEPS}-step floor -- the window is nearly gone,"
+  say "         so this pretrain will be too short to be worth much.  Check WALL."
+fi
 
 tmux kill-session -t realsrpt 2>/dev/null
 tmux new-session -d -s realsrpt \

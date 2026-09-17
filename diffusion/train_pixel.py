@@ -32,11 +32,12 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 
 from .data import RealSRCropDataset, make_split
 from .data import default_root
 from .dit import build_dit
+from .unet import build_unet
 from .flow import flow_loss, sample_flow
 from .metrics import official_pair_metrics
 from .vae import psnr01, ssim01
@@ -47,8 +48,18 @@ def parse_args():
     p.add_argument("--data-root", default="", help="auto-detected if empty")
     p.add_argument("--out", default=r"G:\RealSR\experiments\diffusion\pixel_dit")
     p.add_argument("--objective", default="flow", choices=["flow", "reg"])
+    p.add_argument("--backbone", default="dit", choices=["dit", "unet"],
+                   help="dit = token transformer; unet = conv encoder/decoder with skips")
     p.add_argument("--size", default="S", choices=["XS", "S", "M", "B"])
     p.add_argument("--patch", type=int, default=2)
+    # U-Net only (ignored by the DiT path)
+    p.add_argument("--base", type=int, default=0, help="unet: base channel count (0 = from --size)")
+    p.add_argument("--mult", default="1,2,4,4", help="unet: channel multiplier per level")
+    p.add_argument("--num-res", type=int, default=2, help="unet: residual blocks per level")
+    p.add_argument("--attn-levels", default="2,3", help="unet: levels that get self-attention")
+    p.add_argument("--native-lr", type=int, default=-1,
+                   help="unet: run the encoder/decoder at LR scale and pixel-shuffle back up. "
+                        "-1 auto (on for reg, off for flow), 0 off, 1 on")
     p.add_argument("--hidden", type=int, default=0)
     p.add_argument("--depth", type=int, default=0)
     p.add_argument("--heads", type=int, default=0)
@@ -77,6 +88,12 @@ def parse_args():
     p.add_argument("--val-eval-steps", type=int, default=8)
     p.add_argument("--save-every", type=int, default=5000)
     p.add_argument("--num-workers", type=int, default=4)
+    p.add_argument("--cache-data", type=int, default=1,
+                   help="preload and decode the training images once; without it the PNG "
+                        "decode caps the loader at a few hundred samples/s")
+    p.add_argument("--decoded-manifest", default="data/decoded/manifest.json",
+                   help="manifest of pre-decoded uint8 blobs (scripts/server/precache_hr.py); "
+                        "images found there are read via mmap instead of decoded. '' disables.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--resume", default="")
     p.add_argument("--init", default="",
@@ -132,40 +149,70 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     (out / "args.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
 
-    _real = RealSRCropDataset(args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True)
+    dm = args.decoded_manifest or None
+    _real = RealSRCropDataset(args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True,
+                             cache=bool(args.cache_data), decoded_manifest=dm)
     if args.pretrain_root:
         # train on BSRGAN-degraded DIV2K/Flickr2K, but KEEP the RealSR val split
         # so we can watch zero-shot transfer while pretraining.
         from .bsrgan import BSRGANDataset
 
         ds = BSRGANDataset(args.pretrain_root, args.lr_patch, args.scale, True,
-                           args.pretrain_limit, args.seed)
+                           args.pretrain_limit, args.seed, decoded_manifest=dm)
         _, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
         print(f"pretrain: {len(ds)} HR images from {args.pretrain_root}", flush=True)
     else:
         ds, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
+    # RealSR Train has only 390 usable pairs.  With batch >= len(ds) an epoch
+    # yields zero (drop_last) or one full batch, and the loop would rebuild the
+    # worker pool on almost every step.  Draw several batches per epoch with
+    # replacement instead, and keep the workers alive across epochs.
+    sampler = None
+    if len(ds) <= args.batch:
+        sampler = RandomSampler(ds, replacement=True, num_samples=args.batch * 8)
+        print(f"  sampler: {len(ds)} pairs < batch {args.batch} -> with replacement, "
+              f"{args.batch * 8} samples/epoch ({8} steps)", flush=True)
     loader = DataLoader(
         ds,
         batch_size=args.batch,
-        shuffle=True,
+        sampler=sampler,
+        shuffle=sampler is None,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
+        persistent_workers=args.num_workers > 0,
     )
     hr_px = args.lr_patch * args.scale
     is_flow = args.objective == "flow"
     in_ch = 6 if is_flow else 3
     kw = {"input_size": hr_px, "patch_size": args.patch, "in_channels": in_ch, "use_checkpoint": args.grad_ckpt}
-    if args.hidden:
-        kw["hidden_size"] = args.hidden
-    if args.depth:
-        kw["depth"] = args.depth
-    if args.heads:
-        kw["num_heads"] = args.heads
-    model = build_dit(args.size, **kw).to(device)
+    if args.backbone == "unet":
+        kw.pop("patch_size")
+        kw["mult"] = tuple(int(m) for m in args.mult.split(",") if m.strip())
+        kw["num_res"] = args.num_res
+        kw["attn_levels"] = tuple(int(m) for m in args.attn_levels.split(",") if m.strip())
+        if args.base:
+            kw["base"] = args.base
+        ns = args.native_lr
+        if ns < 0:
+            ns = 1 if args.objective == "reg" else 0
+        kw["in_stride"] = 2 if ns else 1
+        kw["out_scale"] = 2 if ns else 1
+        model = build_unet(args.size, **kw).to(device)
+        print(f"  unet native_lr={bool(ns)} in_stride={kw['in_stride']} "
+              f"out_scale={kw['out_scale']} align={model.align}", flush=True)
+    else:
+        if args.hidden:
+            kw["hidden_size"] = args.hidden
+        if args.depth:
+            kw["depth"] = args.depth
+        if args.heads:
+            kw["num_heads"] = args.heads
+        model = build_dit(args.size, **kw).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(
-        f"PixelDiT-{args.size} {n_params:.2f}M  objective={args.objective}  HR={hr_px} "
+        f"{'PixelUNet' if args.backbone == 'unet' else 'PixelDiT'}-{args.size} {n_params:.2f}M  "
+        f"backbone={args.backbone} objective={args.objective}  HR={hr_px} "
         f"in_ch={in_ch} residual={bool(args.residual)} train={len(ds)} val={0 if val_ds is None else len(val_ds)}",
         flush=True,
     )

@@ -206,7 +206,11 @@ class BSRGANDataset(Dataset):
     """
 
     def __init__(self, root: str, lr_patch: int = 64, scale: int = 2,
-                 augment: bool = True, limit: int = 0, seed: int = 42):
+                 augment: bool = True, limit: int = 0, seed: int = 42,
+                 decoded_manifest: str | None = None):
+        from .decoded import DecodedStore
+
+        self.store = DecodedStore(decoded_manifest)
         # root may be a comma-separated list (e.g. DIV2K + Flickr2K)
         self.files = []
         for r in [x.strip() for x in root.split(",") if x.strip()]:
@@ -219,6 +223,10 @@ class BSRGANDataset(Dataset):
         self.ps = lr_patch
         self.sc = scale
         self.augment = augment
+        hits = sum(1 for f in self.files if self.store.has(f))
+        print(f"  BSRGANDataset: {len(self.files)} images, {hits} from the decoded cache "
+              f"({self.store.gb:.1f} GB mmapped), {len(self.files) - hits} still decoded on the fly",
+              flush=True)
 
     def __len__(self) -> int:
         return len(self.files)
@@ -226,16 +234,27 @@ class BSRGANDataset(Dataset):
     def __getitem__(self, idx: int):
         ps, sc = self.ps, self.sc
         hs = ps * sc
-        with Image.open(self.files[idx]) as im:
-            im = im.convert("RGB")
-            w, h = im.size
+        full = self.store.get(self.files[idx])
+        if full is not None:
+            h, w = full.shape[:2]
             if w < hs or h < hs:                       # pad small images up
-                im = _I.new("RGB", (max(w, hs), max(h, hs)))
-                im.paste(im.crop((0, 0, w, h)))
-                w, h = im.size
+                pad = np.zeros((max(h, hs), max(w, hs), 3), dtype=np.uint8)
+                pad[:h, :w] = full
+                full, h, w = pad, pad.shape[0], pad.shape[1]
             top = random.randint(0, h - hs)
             left = random.randint(0, w - hs)
-            hr = np.asarray(im.crop((left, top, left + hs, top + hs)), dtype=np.uint8)
+            hr = full[top : top + hs, left : left + hs]
+        else:
+            with Image.open(self.files[idx]) as im:
+                im = im.convert("RGB")
+                w, h = im.size
+                if w < hs or h < hs:                   # pad small images up
+                    im = _I.new("RGB", (max(w, hs), max(h, hs)))
+                    im.paste(im.crop((0, 0, w, h)))
+                    w, h = im.size
+                top = random.randint(0, h - hs)
+                left = random.randint(0, w - hs)
+                hr = np.asarray(im.crop((left, top, left + hs, top + hs)), dtype=np.uint8)
 
         if self.augment:
             if random.random() < 0.5:
