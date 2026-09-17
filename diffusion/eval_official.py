@@ -17,6 +17,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 from pathlib import Path
 
@@ -28,9 +29,28 @@ from PIL import Image
 from .data import build_index
 from .data import default_root
 from .dit import build_dit
+from .unet import build_unet
 from .flow import sample_flow
 from .metrics import official_pair_metrics
 from .vae import decode, encode, load_vae
+
+
+def _amp(device, bf16: bool):
+    """bf16 autocast for the DiT/flow sampling ONLY; the VAE stays fp32.
+
+    Training (train_latent / train_pixel), the batch bench and the latent
+    precompute all run the network in bf16, but this eval path was left in fp32
+    -- twice the memory and roughly twice the wall clock of every other module
+    in the repo.  The VAE is deliberately NOT autocast: a bf16 decode costs real
+    PSNR, and the same split (bf16 model -> fp32 VAE decode) is what the
+    reference implementation uses.
+
+    Opt-in via --bf16 so that numbers produced before this change stay
+    comparable.
+    """
+    if bf16 and device.type == "cuda":
+        return torch.amp.autocast("cuda", dtype=torch.bfloat16)
+    return contextlib.nullcontext()
 
 
 def load_rgb_u8(path: str) -> np.ndarray:
@@ -109,7 +129,7 @@ def _chunked(idx, n):
 
 @torch.no_grad()
 def sr_latent_tiled(model, vae, vinfo, lr_u8, scale, steps, tile, pad, device, objective, seed,
-                    tile_batch=8, residual=False):
+                    tile_batch=8, residual=False, bf16=False):
     """Bicubic-up LR -> tile encode -> flow ODE (or single reg forward) -> decode -> stitch."""
     h, w = lr_u8.shape[:2]
     hr_h, hr_w = h * scale, w * scale
@@ -141,40 +161,51 @@ def sr_latent_tiled(model, vae, vinfo, lr_u8, scale, steps, tile, pad, device, o
         for chunk in _chunked(group, max(1, tile_batch)):
             cond = torch.cat([lr_up[:, :, y0:y1, x0:x1] for (y0, x0, y1, x1) in chunk], dim=0)
             zc = encode(vae, cond, vinfo, sample=False)
-            if objective == "reg":
-                z = zc + model(zc, t0.expand(zc.shape[0]))
-            else:
-                d = sample_flow(
-                    model,
-                    (zc.shape[0], vinfo.latent_channels, zc.shape[-2], zc.shape[-1]),
-                    cond=zc,
-                    steps=steps,
-                    solver="heun",
-                    device=device,
-                    seed=seed,
-                )
-                z = zc + d if residual else d
-            rec = decode(vae, z, vinfo)
+            with _amp(device, bf16):
+                if objective == "reg":
+                    z = zc + model(zc, t0.expand(zc.shape[0]))
+                else:
+                    d = sample_flow(
+                        model,
+                        (zc.shape[0], vinfo.latent_channels, zc.shape[-2], zc.shape[-1]),
+                        cond=zc,
+                        steps=steps,
+                        solver="heun",
+                        device=device,
+                        seed=seed,
+                    )
+                    z = zc + d if residual else d
+            rec = decode(vae, z.float(), vinfo)
             for i, (y0, x0, y1, x1) in enumerate(chunk):
                 _accumulate(out, acc, rec[i : i + 1], H, W, pad, y0, x0)
             del cond, zc, z, rec
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
     out = out / acc.clamp(min=1e-6)
     return to_u8(out[0, :, :hr_h, :hr_w])
 
 
 @torch.no_grad()
 def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, objective, seed,
-                   tile_batch=8):
+                   tile_batch=8, bf16=False):
     h, w = lr_u8.shape[:2]
     hr_h, hr_w = h * scale, w * scale
-    out = torch.zeros(1, 3, hr_h, hr_w, device=device)
-    acc = torch.zeros(1, 1, hr_h, hr_w, device=device)
+    # a U-Net with in_stride/out_scale needs tiles aligned to 2^(levels+1);
+    # the DiT only needs patch alignment (2).
+    align = max(2, int(getattr(model, "align", 2) or 2))
+    # RealSR HR sizes are not multiples of `align` (e.g. 1000 % 32 == 8), and
+    # _tile_windows clamps the last window to H, which would leave the U-Net
+    # dividing an unaligned size and its skip concat failing.  Pad the image up
+    # to a multiple of align, work there, crop the result back -- same trick the
+    # latent path already uses for the VAE grid.
+    H = hr_h + (align - hr_h % align) % align
+    W = hr_w + (align - hr_w % align) % align
+    out = torch.zeros(1, 3, H, W, device=device)
+    acc = torch.zeros(1, 1, H, W, device=device)
     lr_t = to_tensor(lr_u8).unsqueeze(0).to(device)
     lr_up = F.interpolate(lr_t, size=(hr_h, hr_w), mode="bicubic", align_corners=False).clamp(0, 1)
-    core = max(tile * scale - (tile * scale) % 2, 2)
-    wins = _tile_windows(hr_h, hr_w, core, pad, 2)
+    if H != hr_h or W != hr_w:
+        lr_up = F.pad(lr_up, (0, W - hr_w, 0, H - hr_h), mode="replicate")
+    core = max(tile * scale - (tile * scale) % align, align)
+    wins = _tile_windows(H, W, core, pad, align)
     t0 = torch.zeros(1, device=device)
 
     by_shape: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
@@ -184,26 +215,27 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
     for shape, group in by_shape.items():
         for chunk in _chunked(group, max(1, tile_batch)):
             cond = torch.cat([lr_up[:, :, y0:y1, x0:x1] for (y0, x0, y1, x1) in chunk], dim=0)
-            if objective == "reg":
-                rec = (cond + model(cond, t0.expand(cond.shape[0]))).clamp(0, 1)
-            else:
-                z = sample_flow(
-                    model,
-                    (cond.shape[0], 3, cond.shape[-2], cond.shape[-1]),
-                    cond=cond,
-                    steps=steps,
-                    solver="heun",
-                    device=device,
-                    seed=seed,
-                )
-                rec = (z * 2.0 + cond).clamp(0, 1) if residual else z.clamp(0, 1)
+            with _amp(device, bf16):
+                if objective == "reg":
+                    rec = cond + model(cond, t0.expand(cond.shape[0]))
+                else:
+                    z = sample_flow(
+                        model,
+                        (cond.shape[0], 3, cond.shape[-2], cond.shape[-1]),
+                        cond=cond,
+                        steps=steps,
+                        solver="heun",
+                        device=device,
+                        seed=seed,
+                    )
+                    rec = (z * 2.0 + cond) if residual else z
+            # the fp32 `cond` promotes the sum back to fp32 automatically
+            rec = rec.clamp(0, 1).float()
             for i, (y0, x0, y1, x1) in enumerate(chunk):
-                _accumulate(out, acc, rec[i : i + 1], hr_h, hr_w, pad, y0, x0)
+                _accumulate(out, acc, rec[i : i + 1], H, W, pad, y0, x0)
             del cond, rec
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
     out = out / acc.clamp(min=1e-6)
-    return to_u8(out[0])
+    return to_u8(out[0, :, :hr_h, :hr_w])
 
 
 def run_pairs(pairs, sr_fn, shave=0, oom_state=None):
@@ -273,6 +305,10 @@ def main():
     p.add_argument("--out", default="")
     p.add_argument("--residual", action="store_true", help="pixel flow: HR = residual + bicubic-up")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--bf16", action="store_true",
+                   help="bf16 autocast for the DiT/flow only (the VAE stays fp32). "
+                        "Roughly 2x faster and 2x less memory.  Off by default so "
+                        "that numbers produced before this flag stay comparable.")
     args = p.parse_args()
     if not getattr(args, "data_root", ""):
         args.data_root = default_root()
@@ -303,13 +339,33 @@ def main():
         input_size = int(ck.get("hr_px") or targs.get("lr_patch", 64) * targs.get("scale", 2))
         default_tile = input_size // int(targs.get("scale", 2))
 
-    model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)
+    def _ints(s, dflt):
+        parts = [x for x in str(s if s is not None else dflt).split(",") if x.strip()]
+        return tuple(int(x) for x in parts) or tuple(int(x) for x in dflt.split(","))
+
+    backbone = str(targs.get("backbone", "dit"))
+    if backbone == "unet":
+        # native_lr was -1 (auto) unless explicitly set; mirror train_pixel's rule
+        ns = int(targs.get("native_lr", -1))
+        if ns < 0:
+            ns = 1 if objective == "reg" else 0
+        model = build_unet(
+            size, input_size=input_size, in_channels=in_ch,
+            base=int(targs.get("base", 0) or 0),
+            mult=_ints(targs.get("mult"), "1,2,4,4"),
+            num_res=int(targs.get("num_res", 2)),
+            attn_levels=_ints(targs.get("attn_levels"), "2,3"),
+            in_stride=2 if ns else 1,
+            out_scale=2 if ns else 1,
+        ).to(device)
+    else:
+        model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)
     model.load_state_dict(ck["model"])
     model.eval()
     if args.tile <= 0:
         args.tile = default_tile
     print(
-        f"loaded {ckpt_path} mode={mode} objective={objective} in_ch={in_ch} size={size} "
+        f"loaded {ckpt_path} mode={mode} objective={objective} backbone={backbone} in_ch={in_ch} size={size} "
         f"input={input_size} tile={args.tile} pad={args.pad} seed={args.seed}",
         flush=True,
     )
@@ -330,11 +386,11 @@ def main():
         if mode == "latent":
             return lambda lr_u8, sc: sr_latent_tiled(
                 model, vae, vinfo, lr_u8, sc, steps, args.tile, args.pad, device, objective, args.seed,
-                tile_batch=oom_state["tb"], residual=residual,
+                tile_batch=oom_state["tb"], residual=residual, bf16=args.bf16,
             )
         return lambda lr_u8, sc: sr_pixel_tiled(
             model, lr_u8, sc, steps, args.tile, args.pad, residual, device, objective, args.seed,
-            tile_batch=oom_state["tb"],
+            tile_batch=oom_state["tb"], bf16=args.bf16,
         )
 
     sweep = []

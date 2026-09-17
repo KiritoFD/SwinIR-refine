@@ -89,7 +89,11 @@ class RealSRCropDataset(Dataset):
         lr_patch: int = 64,
         augment: bool = True,
         max_pairs: int | None = None,
+        cache: bool = False,
+        decoded_manifest: str | None = None,
     ):
+        from .decoded import DecodedStore
+
         self.scale = scale
         self.lr_patch = lr_patch
         self.augment = augment and split.lower() == "train"
@@ -99,49 +103,61 @@ class RealSRCropDataset(Dataset):
         if max_pairs is not None and len(self.pairs) > max_pairs:
             rng = random.Random(0)
             self.pairs = rng.sample(self.pairs, max_pairs)
+        self.store = DecodedStore(decoded_manifest)
+        if self.store:
+            hits = sum(1 for lp, hp, _ in self.pairs if self.store.has(lp) and self.store.has(hp))
+            print(f"  RealSRCropDataset: {hits}/{len(self.pairs)} pairs from the decoded cache",
+                  flush=True)
+
+        # Decoding the PNGs on every __getitem__ caps the loader at a few hundred
+        # samples/s -- far below what a 700-sample batch at 0.43 s/step needs.
+        # Preloading here (not lazily) matters: DataLoader forks its workers AFTER
+        # __init__, so the arrays are shared copy-on-write instead of being
+        # duplicated per worker. 406 pairs is ~2 GB.
+        self._cache = None
+        if cache:
+            self._cache = [self._load_full(i) for i in range(len(self.pairs))]
+
+    def _load_full(self, idx: int):
+        lr_path, hr_path, _sc = self.pairs[idx]
+        with Image.open(lr_path) as li, Image.open(hr_path) as hi:
+            lr = np.asarray(li.convert("RGB"), dtype=np.uint8)
+            hr = np.asarray(hi.convert("RGB"), dtype=np.uint8)
+        return lr, hr
 
     def __len__(self) -> int:
         return len(self.pairs)
 
     def __getitem__(self, idx: int):
-        lr_path, hr_path, sc = self.pairs[idx]
         ps = self.lr_patch
-        with Image.open(lr_path) as li, Image.open(hr_path) as hi:
-            lw, lh = li.size
-            hw, hh = hi.size
-            max_lw, max_lh = hw // sc, hh // sc
-            lw, lh = min(lw, max_lw), min(lh, max_lh)
-            if lw < ps or lh < ps:
-                box_lr = (0, 0, max(lw, 1), max(lh, 1))
-                box_hr = (0, 0, max(lw, 1) * sc, max(lh, 1) * sc)
-                lr = np.asarray(li.crop(box_lr).convert("RGB"), dtype=np.uint8)
-                hr = np.asarray(hi.crop(box_hr).convert("RGB"), dtype=np.uint8)
-                pad_h = max(0, ps - lr.shape[0])
-                pad_w = max(0, ps - lr.shape[1])
-                if pad_h or pad_w:
-                    lr = np.pad(lr, ((0, pad_h), (0, pad_w), (0, 0)), mode="reflect")
-                    hr = np.pad(
-                        hr,
-                        ((0, pad_h * sc), (0, pad_w * sc), (0, 0)),
-                        mode="reflect",
-                    )
+        lr_path, hr_path, sc = self.pairs[idx]
+        lr_full, hr_full = self.store.get(lr_path), self.store.get(hr_path)
+        if lr_full is None or hr_full is None:
+            lr_full, hr_full = self._cache[idx] if self._cache is not None else self._load_full(idx)
+        lh, lw = lr_full.shape[:2]
+        hh, hw = hr_full.shape[:2]
+        lw, lh = min(lw, hw // sc), min(lh, hh // sc)
+        if lw < ps or lh < ps:
+            lr = lr_full[: max(lh, 1), : max(lw, 1)]
+            hr = hr_full[: max(lh, 1) * sc, : max(lw, 1) * sc]
+            pad_h = max(0, ps - lr.shape[0])
+            pad_w = max(0, ps - lr.shape[1])
+            if pad_h or pad_w:
+                lr = np.pad(lr, ((0, pad_h), (0, pad_w), (0, 0)), mode="reflect")
+                hr = np.pad(
+                    hr,
+                    ((0, pad_h * sc), (0, pad_w * sc), (0, 0)),
+                    mode="reflect",
+                )
+        else:
+            if self.augment:
+                top = random.randint(0, lh - ps)
+                left = random.randint(0, lw - ps)
             else:
-                if self.augment:
-                    top = random.randint(0, lh - ps)
-                    left = random.randint(0, lw - ps)
-                else:
-                    top = (lh - ps) // 2
-                    left = (lw - ps) // 2
-                lr = np.asarray(
-                    li.crop((left, top, left + ps, top + ps)).convert("RGB"),
-                    dtype=np.uint8,
-                )
-                hr = np.asarray(
-                    hi.crop(
-                        (left * sc, top * sc, (left + ps) * sc, (top + ps) * sc)
-                    ).convert("RGB"),
-                    dtype=np.uint8,
-                )
+                top = (lh - ps) // 2
+                left = (lw - ps) // 2
+            lr = lr_full[top : top + ps, left : left + ps]
+            hr = hr_full[top * sc : (top + ps) * sc, left * sc : (left + ps) * sc]
         if self.augment:
             if random.random() < 0.5:
                 lr = lr[:, ::-1].copy()
