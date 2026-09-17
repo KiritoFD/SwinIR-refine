@@ -134,6 +134,19 @@ def run_val(net, val_ds, device, objective, steps, max_n, seed, residual):
     return float(np.mean(ys)), float(np.mean(ss))
 
 
+def _worker_init(_worker_id: int):
+    """Pin each DataLoader worker to a single compute thread.
+
+    Left alone, every worker spawns its own OpenMP pool -- 24 threads each on
+    this box, so 12 workers means ~288 spinning threads competing for 24 cores.
+    BSRGAN's degradation is a handful of tiny 128x128 convolutions, and that
+    thrash made it 10x slower than single-threaded: _blur 33.0 ms -> 3.3 ms,
+    the full degrade 153 ms -> 10.6 ms per item.  That difference is the whole
+    reason the loader could not feed a 768-sample batch.
+    """
+    torch.set_num_threads(1)
+
+
 def lr_at(step, base, warmup, total):
     if step < warmup:
         return base * (step + 1) / max(warmup, 1)
@@ -181,6 +194,7 @@ def main():
         pin_memory=True,
         drop_last=True,
         persistent_workers=args.num_workers > 0,
+        worker_init_fn=_worker_init if args.num_workers > 0 else None,
     )
     hr_px = args.lr_patch * args.scale
     is_flow = args.objective == "flow"
