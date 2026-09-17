@@ -61,6 +61,9 @@ def parse_args():
     p.add_argument("--weight-decay", type=float, default=0.0)
     p.add_argument("--t-sampler", default="logit_normal")
     p.add_argument("--ema", type=float, default=0.999)
+    p.add_argument("--compile", action="store_true", help="torch.compile the training step")
+    p.add_argument("--compile-mode", default="default",
+                   choices=["default", "reduce-overhead", "max-autotune"])
     p.add_argument("--grad-ckpt", action="store_true")
     p.add_argument("--amp", action="store_true")
     p.add_argument("--residual", type=int, default=1,
@@ -154,6 +157,7 @@ def main():
         flush=True,
     )
 
+    model_raw = model
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp)
     ema = None
@@ -161,6 +165,14 @@ def main():
         ema = copy.deepcopy(model).eval()
         for p_ in ema.parameters():
             p_.requires_grad_(False)
+
+    if args.compile:
+        try:
+            model = torch.compile(model_raw, mode=args.compile_mode)
+            print(f"torch.compile ON (mode={args.compile_mode})", flush=True)
+        except Exception as exc:  # never let a compile failure kill a long run
+            model = model_raw
+            print(f"torch.compile FAILED ({exc}); falling back to eager", flush=True)
 
     def ema_update():
         if ema is None:
@@ -174,7 +186,7 @@ def main():
     no_gain = 0
     if args.resume and Path(args.resume).is_file():
         ck = torch.load(args.resume, map_location="cpu", weights_only=False)
-        model.load_state_dict(ck["model"])
+        model_raw.load_state_dict(ck["model"])
         if ema is not None and ck.get("ema") is not None:
             ema.load_state_dict(ck["ema"])
         step = int(ck.get("step", 0))
@@ -237,7 +249,7 @@ def main():
                 f.write(json.dumps({"step": step, "loss": float(loss.detach()), "lr": cur_lr}) + "\n")
 
         if args.eval_every > 0 and val_ds is not None and ((step + 1) % args.eval_every == 0):
-            net = ema if ema is not None else model
+            net = ema if ema is not None else model_raw
             psnr, ssim = run_val(
                 net, val_ds, device, args.objective, max(1, args.val_eval_steps),
                 args.val_pairs, args.seed, bool(args.residual),
@@ -263,8 +275,13 @@ def main():
     print(f"done best_val_Y={best:.3f} → {out}", flush=True)
 
 
+def _unwrap(m):
+    """torch.compile wraps the module; keep checkpoint keys clean."""
+    return getattr(m, "_orig_mod", m)
+
+
 def save_payload(args, model, ema, step, best, hr_px, in_ch):
-    net = ema if ema is not None else model
+    net = ema if ema is not None else _unwrap(model)
     return {
         "step": step,
         "model": net.state_dict(),
