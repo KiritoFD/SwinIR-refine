@@ -79,6 +79,11 @@ def parse_args():
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--resume", default="")
+    p.add_argument("--init", default="",
+                   help="load weights only (step/optimiser reset) — for fine-tuning a pretrained ckpt")
+    p.add_argument("--pretrain-root", default="",
+                   help="HR image dir for SwinIR/BSRGAN-style synthetic pretraining")
+    p.add_argument("--pretrain-limit", type=int, default=0, help="cap pretraining images (0 = all)")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
     if not getattr(args, "data_root", ""):
@@ -127,10 +132,18 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     (out / "args.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
 
-    ds, val_ds = make_split(
-        RealSRCropDataset(args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True),
-        args.val_pairs, seed=args.seed,
-    )
+    _real = RealSRCropDataset(args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True)
+    if args.pretrain_root:
+        # train on BSRGAN-degraded DIV2K/Flickr2K, but KEEP the RealSR val split
+        # so we can watch zero-shot transfer while pretraining.
+        from .bsrgan import BSRGANDataset
+
+        ds = BSRGANDataset(args.pretrain_root, args.lr_patch, args.scale, True,
+                           args.pretrain_limit, args.seed)
+        _, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
+        print(f"pretrain: {len(ds)} HR images from {args.pretrain_root}", flush=True)
+    else:
+        ds, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
     loader = DataLoader(
         ds,
         batch_size=args.batch,
@@ -192,6 +205,15 @@ def main():
         step = int(ck.get("step", 0))
         best = float(ck.get("best_psnr_y", ck.get("best_psnr01", -1.0)))
         print(f"resumed from {args.resume} step={step} best={best:.3f}", flush=True)
+
+    if args.init and Path(args.init).is_file():
+        # weights only: fine-tune a pretrained ckpt from step 0 with a fresh schedule
+        ck = torch.load(args.init, map_location="cpu", weights_only=False)
+        model_raw.load_state_dict(ck["model"])
+        if ema is not None and ck.get("ema") is not None:
+            ema.load_state_dict(ck["ema"])
+        step, best, no_gain = 0, -1.0, 0
+        print(f"init weights from {args.init} (training state reset)", flush=True)
 
     amp_dtype = torch.bfloat16 if args.amp else torch.float32
     t_zeros = torch.zeros(1, device=device)
