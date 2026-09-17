@@ -109,7 +109,7 @@ def _chunked(idx, n):
 
 @torch.no_grad()
 def sr_latent_tiled(model, vae, vinfo, lr_u8, scale, steps, tile, pad, device, objective, seed,
-                    tile_batch=8):
+                    tile_batch=8, residual=False):
     """Bicubic-up LR -> tile encode -> flow ODE (or single reg forward) -> decode -> stitch."""
     h, w = lr_u8.shape[:2]
     hr_h, hr_w = h * scale, w * scale
@@ -144,7 +144,7 @@ def sr_latent_tiled(model, vae, vinfo, lr_u8, scale, steps, tile, pad, device, o
             if objective == "reg":
                 z = zc + model(zc, t0.expand(zc.shape[0]))
             else:
-                z = sample_flow(
+                d = sample_flow(
                     model,
                     (zc.shape[0], vinfo.latent_channels, zc.shape[-2], zc.shape[-1]),
                     cond=zc,
@@ -153,6 +153,7 @@ def sr_latent_tiled(model, vae, vinfo, lr_u8, scale, steps, tile, pad, device, o
                     device=device,
                     seed=seed,
                 )
+                z = zc + d if residual else d
             rec = decode(vae, z, vinfo)
             for i, (y0, x0, y1, x1) in enumerate(chunk):
                 _accumulate(out, acc, rec[i : i + 1], H, W, pad, y0, x0)
@@ -329,7 +330,7 @@ def main():
         if mode == "latent":
             return lambda lr_u8, sc: sr_latent_tiled(
                 model, vae, vinfo, lr_u8, sc, steps, args.tile, args.pad, device, objective, args.seed,
-                tile_batch=oom_state["tb"],
+                tile_batch=oom_state["tb"], residual=residual,
             )
         return lambda lr_u8, sc: sr_pixel_tiled(
             model, lr_u8, sc, steps, args.tile, args.pad, residual, device, objective, args.seed,
