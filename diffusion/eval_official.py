@@ -31,6 +31,7 @@ from .data import default_root
 from .dit import build_dit
 from .unet import build_unet
 from .flow import sample_flow
+from .iqa import IQAScorer
 from .metrics import official_pair_metrics
 from .vae import decode, encode, load_vae
 
@@ -238,7 +239,7 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
     return to_u8(out[0, :, :hr_h, :hr_w])
 
 
-def run_pairs(pairs, sr_fn, shave=0, oom_state=None):
+def run_pairs(pairs, sr_fn, shave=0, oom_state=None, iqa=None):
     """sr_fn(lr_u8, scale) -> uint8 SR. On OOM, halves tile_batch and retries once."""
     rows = []
     for i, (lr_path, hr_path, sc) in enumerate(pairs):
@@ -269,17 +270,29 @@ def run_pairs(pairs, sr_fn, shave=0, oom_state=None):
             a = a[shave:-shave, shave:-shave]
             b = b[shave:-shave, shave:-shave]
         m = official_pair_metrics(a, b)
+        if iqa is not None:
+            # NR-IQA on the SR image only -- this is the half PSNR cannot see
+            m.update(iqa.score(a))
         m["name"] = Path(lr_path).name
         rows.append(m)
+        extra = ""
+        if iqa is not None:
+            extra = "  " + " ".join(
+                f"{k} {m[k]:.3f}" for k in iqa.available() if k in m
+            )
         print(
-            f"  [{i+1}/{len(pairs)}] {m['name']} Y {m['psnr_y']:.2f}/{m['ssim_y']:.4f} RGB {m['psnr_rgb']:.2f}",
+            f"  [{i+1}/{len(pairs)}] {m['name']} Y {m['psnr_y']:.2f}/{m['ssim_y']:.4f} "
+            f"RGB {m['psnr_rgb']:.2f}{extra}",
             flush=True,
         )
     return rows
 
 
 def mean(rows, k):
-    vals = [r[k] for r in rows if r.get(k) == r.get(k)]
+    # the guard has to be `k in r`, not `r.get(k) == r.get(k)`: for a missing key
+    # that comparison is None == None -> True, and the r[k] then raises KeyError.
+    # It bites as soon as any optional column (e.g. the IQA scores) is absent.
+    vals = [r[k] for r in rows if k in r and r[k] == r[k]]
     return float(np.mean(vals)) if vals else float("nan")
 
 
@@ -305,6 +318,9 @@ def main():
     p.add_argument("--out", default="")
     p.add_argument("--residual", action="store_true", help="pixel flow: HR = residual + bicubic-up")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--iqa", action="store_true",
+                   help="also compute MUSIQ / MANIQA (no-reference perceptual). "
+                        "Slower, and needs the pyiqa checkpoints pre-placed.")
     p.add_argument("--bf16", action="store_true",
                    help="bf16 autocast for the DiT/flow only (the VAE stays fp32). "
                         "Roughly 2x faster and 2x less memory.  Off by default so "
@@ -402,7 +418,10 @@ def main():
             sweep.append(rec)
             print(f"SWEEP steps={s} nfe={2*s} n={rec['n']} Y {rec['psnr_y']:.3f}/{rec['ssim_y']:.4f}", flush=True)
 
-    rows = run_pairs(pairs, make_sr_fn(args.steps), args.shave, oom_state)
+    iqa = IQAScorer(device) if args.iqa else None
+    if iqa is not None:
+        iqa.available()
+    rows = run_pairs(pairs, make_sr_fn(args.steps), args.shave, oom_state, iqa=iqa)
 
     summary = {
         "protocol": "RealSR official Test.m (limited-range Y, uint8, shave=0; same as model/eval.py)",
@@ -418,13 +437,17 @@ def main():
         "pad": args.pad,
         "seed": args.seed,
         "sweep": sweep,
+        # whatever the IQA scorer actually loaded (names are pyiqa metric ids)
+        "iqa_scores": {n: mean(rows, n) for n in (iqa.available() if iqa else [])},
         "per_image": rows,
     }
     path = out_dir / "eval.json"
     path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(
         f"\n== OFFICIAL n={summary['n']} mode={mode}/{objective} steps={args.steps} | "
-        f"Y {summary['psnr_y']:.4f}/{summary['ssim_y']:.4f} | RGB {summary['psnr_rgb']:.2f} ==",
+        f"Y {summary['psnr_y']:.4f}/{summary['ssim_y']:.4f} | RGB {summary['psnr_rgb']:.2f}"
+        + (" | " + " ".join(f"{k} {v:.3f}" for k, v in summary["iqa_scores"].items())
+           if args.iqa and summary["iqa_scores"] else "") + " ==",
         flush=True,
     )
     print(f"wrote {path}", flush=True)
