@@ -373,6 +373,8 @@ def main():
             attn_levels=_ints(targs.get("attn_levels"), "2,3"),
             in_stride=2 if ns else 1,
             out_scale=2 if ns else 1,
+            ffn=bool(targs.get("ffn", False)),
+            ffn_ratio=float(targs.get("ffn_ratio", 2.66)),
         ).to(device)
     else:
         model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)

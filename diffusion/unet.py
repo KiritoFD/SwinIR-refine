@@ -68,6 +68,9 @@ class TimestepEmbedding(nn.Module):
         return self.mlp(emb)
 
 
+from .gated_ffn import SpatialGatedFFN
+
+
 class ResBlock(nn.Module):
     """GroupNorm -> SiLU -> Conv -> (+temb) -> GroupNorm -> SiLU -> Conv -> + skip.
 
@@ -76,7 +79,8 @@ class ResBlock(nn.Module):
     what makes the reg arms start exactly at the bicubic floor.
     """
 
-    def __init__(self, cin: int, cout: int, t_dim: int):
+    def __init__(self, cin: int, cout: int, t_dim: int, ffn: bool = False,
+                 ffn_ratio: float = 2.66, align: int = 128):
         super().__init__()
         self.norm1 = _gn(cin)
         self.conv1 = nn.Conv2d(cin, cout, 3, padding=1)
@@ -84,6 +88,9 @@ class ResBlock(nn.Module):
         self.norm2 = _gn(cout)
         self.conv2 = nn.Conv2d(cout, cout, 3, padding=1)
         self.skip = nn.Conv2d(cin, cout, 1) if cin != cout else nn.Identity()
+        # the gated FFN is the channel-mixing half; it is zero-initialised too, so
+        # the block is still an identity at step 0 when it is enabled
+        self.ffn = SpatialGatedFFN(cout, ffn_ratio, align) if ffn else None
         nn.init.zeros_(self.conv2.weight)
         nn.init.zeros_(self.conv2.bias)
         nn.init.zeros_(self.temb.weight)
@@ -93,7 +100,8 @@ class ResBlock(nn.Module):
         h = self.conv1(F.silu(self.norm1(x)))
         h = h + self.temb(temb)[:, :, None, None]
         h = self.conv2(F.silu(self.norm2(h)))
-        return self.skip(x) + h
+        out = self.skip(x) + h
+        return self.ffn(out) if self.ffn is not None else out
 
 
 class AttnBlock(nn.Module):
@@ -137,6 +145,9 @@ class UNet(nn.Module):
         use_checkpoint: bool = False,
         in_stride: int = 1,
         out_scale: int = 1,
+        ffn: bool = False,
+        ffn_ratio: float = 2.66,
+        align: int = 128,
         **_unused,
     ):
         super().__init__()
@@ -150,6 +161,8 @@ class UNet(nn.Module):
         self.mult = tuple(mult)
         self.in_stride = int(in_stride)
         self.out_scale = int(out_scale)
+        self.ffn = bool(ffn)
+        self.ffn_ratio = float(ffn_ratio)
 
         # int() so fractional multipliers like 0.5 are allowed (base 64 + 0.5 = 32);
         # a float would reach GroupNorm and blow up there.
@@ -176,7 +189,7 @@ class UNet(nn.Module):
         for i, c in enumerate(chans):
             blocks = nn.ModuleList()
             for j in range(num_res):
-                blocks.append(ResBlock(prev if j == 0 else c, c, t_dim))
+                blocks.append(ResBlock(prev if j == 0 else c, c, t_dim, self.ffn, self.ffn_ratio, align))
             if i in attn_levels:
                 blocks.append(AttnBlock(c))
             self.enc.append(blocks)
@@ -184,7 +197,9 @@ class UNet(nn.Module):
             prev = c
 
         self.mid = nn.ModuleList(
-            [ResBlock(chans[-1], chans[-1], t_dim), AttnBlock(chans[-1]), ResBlock(chans[-1], chans[-1], t_dim)]
+            [ResBlock(chans[-1], chans[-1], t_dim, self.ffn, self.ffn_ratio, align),
+             AttnBlock(chans[-1]),
+             ResBlock(chans[-1], chans[-1], t_dim, self.ffn, self.ffn_ratio, align)]
         )
 
         # up[i]: c_{i+1} -> c_i (resolution x2).  dec[i] consumes cat(x, skip) = 2*c_i.
@@ -198,7 +213,7 @@ class UNet(nn.Module):
         for i in range(L):
             blocks = nn.ModuleList()
             for j in range(num_res):
-                blocks.append(ResBlock(2 * chans[i] if j == 0 else chans[i], chans[i], t_dim))
+                blocks.append(ResBlock(2 * chans[i] if j == 0 else chans[i], chans[i], t_dim, self.ffn, self.ffn_ratio, align))
             if i in attn_levels:
                 blocks.append(AttnBlock(chans[i]))
             self.dec.append(blocks)

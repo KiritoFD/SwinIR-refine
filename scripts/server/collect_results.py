@@ -13,10 +13,13 @@ ROOT = Path("/home/ds/realsr/experiments/diffusion")
 # label -> candidate eval.json paths
 SOURCES = [
     ("bicubic 地板", ["iqa_eval/bicubic_floor/eval.json"]),
+    ("E1 SwinIR-light 0.61M", ["iqa_eval/E1_swinir_light/eval.json"]),
+    ("E2 SwinIR-largeish 3.96M", ["iqa_eval/E2_swinir_capmatch/eval.json"]),
+    ("A0 Mod pure L1 4.05M", ["iqa_eval/A0_l1_only/eval.json"]),
+    ("E11 Mod+Align 4.05M", ["iqa_eval/E11_align_loss/eval.json"]),
     ("latent_flow_flux", ["iqa_eval/latent_flow_flux/eval.json", "latent_flow_flux/eval_official/eval.json"]),
-    ("latent_flow_flux_XS", ["latent_flow_flux_XS/eval_official/eval.json"]),
-    ("latent_reg_flux", ["iqa_eval/latent_reg_flux/eval.json", "latent_reg_flux/eval_official/eval.json"]),
     ("latent_flow_res", ["iqa_eval/latent_flow_res/eval.json", "latent_flow_res/eval_official/eval.json"]),
+    ("latent_reg_flux", ["iqa_eval/latent_reg_flux/eval.json", "latent_reg_flux/eval_official/eval.json"]),
     ("pixel_flow (NFE16)", ["pixel_flow/eval_official/eval.json"]),
     ("DiT pixel_reg_XS", ["iqa_eval/dit_pixel_reg_XS/eval.json"]),
     ("DiT pixel_reg", ["iqa_eval/dit_pixel_reg/eval.json"]),
@@ -28,27 +31,33 @@ SOURCES = [
     ("s1_b64 +预训练+后训练", ["b64_ft15k/eval_iqa/eval.json"]),
     ("shape 1122_b96", ["shape_sweep/1122_b96/eval_iqa/eval.json"]),
     ("shape 1124_b80", ["shape_sweep/1124_b80/eval_iqa/eval.json"]),
-    ("shape 1124_b96", ["shape_sweep/1124_b96/eval_iqa/eval.json"]),
-    ("shape 1244_b80", ["shape_sweep/1244_b80/eval_iqa/eval.json"]),
-    ("shape 1122_b80", ["shape_sweep/1122_b80/eval_iqa/eval.json"]),
+    ("cap b128", ["capacity/b128/eval_iqa/eval.json"]),
+    ("cap b128+FFN", ["capacity/b128_ffn/eval_iqa/eval.json"]),
 ]
 
 print(f"{'实验':26s} {'n':>4s} {'Y':>8s} {'SSIM':>8s} {'RGB':>7s} {'MUSIQ':>8s} {'MANIQA':>8s}")
 print("-" * 74)
 for label, cands in SOURCES:
-    data = None
+    # Some IQA re-runs lost a few pairs (OOM retry), which moves the mean by more
+    # than 1 dB on the latent arms.  Take Y/SSIM from the eval with the most pairs
+    # and the IQA scores from whichever file actually has them.
+    blobs = []
     for c in cands:
         f = ROOT / c
         if f.is_file():
             try:
-                data = json.loads(f.read_text())
-                break
+                blobs.append(json.loads(f.read_text()))
             except Exception:
                 pass
-    if data is None:
+    if not blobs:
         print(f"{label:26s}     (缺)")
         continue
-    iqa = data.get("iqa_scores", {})
+    data = max(blobs, key=lambda d: d.get("n", 0))
+    iqa = {}
+    for d in blobs:
+        if d.get("iqa_scores"):
+            iqa = dict(d["iqa_scores"])
+            break
     musiq = iqa.get("musiq")
     maniqa = iqa.get("maniqa")
     print(f"{label:26s} {data.get('n', 0):4d} {data.get('psnr_y', float('nan')):8.4f} "

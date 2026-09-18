@@ -55,6 +55,11 @@ def parse_args():
     # U-Net only (ignored by the DiT path)
     p.add_argument("--base", type=int, default=0, help="unet: base channel count (0 = from --size)")
     p.add_argument("--mult", default="1,2,4,4", help="unet: channel multiplier per level")
+    p.add_argument("--ffn", action="store_true",
+                   help="add a spatial-gated FFN (continuous MoE gate) to every U-Net "
+                        "residual block. Channel widths must then be 128-aligned, so use "
+                        "--base 128 with it.")
+    p.add_argument("--ffn-ratio", type=float, default=2.66)
     p.add_argument("--num-res", type=int, default=2, help="unet: residual blocks per level")
     p.add_argument("--attn-levels", default="2,3", help="unet: levels that get self-attention")
     p.add_argument("--native-lr", type=int, default=-1,
@@ -227,9 +232,12 @@ def main():
             ns = 1 if args.objective == "reg" else 0
         kw["in_stride"] = 2 if ns else 1
         kw["out_scale"] = 2 if ns else 1
+        kw["ffn"] = bool(args.ffn)
+        kw["ffn_ratio"] = float(args.ffn_ratio)
         model = build_unet(args.size, **kw).to(device)
         print(f"  unet native_lr={bool(ns)} in_stride={kw['in_stride']} "
-              f"out_scale={kw['out_scale']} align={model.align}", flush=True)
+              f"out_scale={kw['out_scale']} align={model.align} ffn={bool(args.ffn)} "
+              f"chans={model.chans}", flush=True)
     else:
         if args.hidden:
             kw["hidden_size"] = args.hidden
