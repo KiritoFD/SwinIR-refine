@@ -207,7 +207,8 @@ class BSRGANDataset(Dataset):
 
     def __init__(self, root: str, lr_patch: int = 64, scale: int = 2,
                  augment: bool = True, limit: int = 0, seed: int = 42,
-                 decoded_manifest: str | None = None):
+                 decoded_manifest: str | None = None,
+                 deterministic: bool = False):
         from .decoded import DecodedStore
 
         self.store = DecodedStore(decoded_manifest)
@@ -223,6 +224,11 @@ class BSRGANDataset(Dataset):
         self.ps = lr_patch
         self.sc = scale
         self.augment = augment
+        # For validation: centre crop + a degradation seeded by the item index.
+        # Without this every VAL call draws a fresh crop AND a fresh random
+        # degradation, so the number moves by ~1 dB of pure noise and cannot be
+        # compared across steps -- which is fatal when it drives ckpt_best.
+        self.deterministic = deterministic
         hits = sum(1 for f in self.files if self.store.has(f))
         print(f"  BSRGANDataset: {len(self.files)} images, {hits} from the decoded cache "
               f"({self.store.gb:.1f} GB mmapped), {len(self.files) - hits} still decoded on the fly",
@@ -241,8 +247,11 @@ class BSRGANDataset(Dataset):
                 pad = np.zeros((max(h, hs), max(w, hs), 3), dtype=np.uint8)
                 pad[:h, :w] = full
                 full, h, w = pad, pad.shape[0], pad.shape[1]
-            top = random.randint(0, h - hs)
-            left = random.randint(0, w - hs)
+            if self.deterministic:
+                top, left = (h - hs) // 2, (w - hs) // 2
+            else:
+                top = random.randint(0, h - hs)
+                left = random.randint(0, w - hs)
             hr = full[top : top + hs, left : left + hs]
         else:
             with Image.open(self.files[idx]) as im:
@@ -252,8 +261,11 @@ class BSRGANDataset(Dataset):
                     im = _I.new("RGB", (max(w, hs), max(h, hs)))
                     im.paste(im.crop((0, 0, w, h)))
                     w, h = im.size
-                top = random.randint(0, h - hs)
-                left = random.randint(0, w - hs)
+                if self.deterministic:
+                    top, left = (h - hs) // 2, (w - hs) // 2
+                else:
+                    top = random.randint(0, h - hs)
+                    left = random.randint(0, w - hs)
                 hr = np.asarray(im.crop((left, top, left + hs, top + hs)), dtype=np.uint8)
 
         if self.augment:
@@ -266,5 +278,5 @@ class BSRGANDataset(Dataset):
                 hr = np.ascontiguousarray(np.rot90(hr, k))
 
         hr_t = torch.from_numpy(np.ascontiguousarray(hr)).permute(2, 0, 1).float() / 255.0
-        lr_t = bsrgan_degrade(hr_t, sf=sc)
+        lr_t = bsrgan_degrade(hr_t, sf=sc, seed=idx if self.deterministic else None)
         return {"lr": lr_t, "hr": hr_t, "scale": sc}

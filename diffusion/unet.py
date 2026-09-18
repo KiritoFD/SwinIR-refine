@@ -41,7 +41,15 @@ from torch.utils.checkpoint import checkpoint
 
 
 def _gn(c: int) -> nn.GroupNorm:
-    return nn.GroupNorm(min(32, c), c)
+    """GroupNorm with the largest group count <= 32 that divides c.
+
+    min(32, c) alone raises for widths like 340 or 48, which are easy to hit
+    once channel counts are computed rather than hand-picked.
+    """
+    g = min(32, c)
+    while g > 1 and c % g:
+        g -= 1
+    return nn.GroupNorm(g, c)
 
 
 class TimestepEmbedding(nn.Module):
@@ -143,7 +151,9 @@ class UNet(nn.Module):
         self.in_stride = int(in_stride)
         self.out_scale = int(out_scale)
 
-        chans = [base * m for m in self.mult]
+        # int() so fractional multipliers like 0.5 are allowed (base 64 + 0.5 = 32);
+        # a float would reach GroupNorm and blow up there.
+        chans = [max(8, int(round(base * m))) for m in self.mult]
         self.chans = chans
         L = len(chans)
 
@@ -193,9 +203,11 @@ class UNet(nn.Module):
                 blocks.append(AttnBlock(chans[i]))
             self.dec.append(blocks)
 
+        # the decoder's last level emits chans[0], which is base*mult[0] and so
+        # differs from `base` whenever mult[0] != 1
         self.out = nn.Sequential(
-            _gn(base), nn.SiLU(),
-            nn.Conv2d(base, self.out_channels * self.out_scale**2, 3, padding=1),
+            _gn(chans[0]), nn.SiLU(),
+            nn.Conv2d(chans[0], self.out_channels * self.out_scale**2, 3, padding=1),
         )
         nn.init.zeros_(self.out[-1].weight)
         nn.init.zeros_(self.out[-1].bias)

@@ -28,10 +28,16 @@ LOG="$ROOT/experiments/diffusion/logs"
 mkdir -p "$OUT_ROOT" "$LOG"
 
 PRETRAIN_ROOT="${PRETRAIN_ROOT:-data/pretrain/DIV2K_train_HR,data/pretrain/DIV2K_valid_HR,data/pretrain/Flickr2K}"
-PRETRAIN_SAMPLES="${PRETRAIN_SAMPLES:-1000000}"
-FINETUNE_SAMPLES="${FINETUNE_SAMPLES:-3900000}"
+# Only the big nets get pretrained.  A 5M net on 406 pairs is not data-starved,
+# so pretraining buys it little; the 18-41M nets are, and that is where the
+# question "does more data fix it" is actually interesting.
+PRETRAIN_SIZES="${PRETRAIN_SIZES:-s deep wide}"
+# Step counts are identical across sizes and so are the batches, which makes the
+# sample budget identical too -- that is what keeps the comparison honest.
+PRE_STEPS="${PRE_STEPS:-20000}"
+FT_STEPS="${FT_STEPS:-25000}"
 PRE_BATCH="${PRE_BATCH:-128}"
-FT_BATCH="${FT_BATCH:-390}"
+FT_BATCH="${FT_BATCH:-256}"
 PRE_WORKERS="${PRE_WORKERS:-12}"
 FT_WORKERS="${FT_WORKERS:-12}"
 PRE_LR="${PRE_LR:-2e-4}"
@@ -57,16 +63,16 @@ for SZ in $SIZES; do
   read -r BASE NR <<< "$(cfg "$SZ")" || { echo "unknown size $SZ"; continue; }
   [[ -z "${BASE:-}" ]] && { echo "unknown size $SZ"; continue; }
 
-  PRE_STEPS=$(( PRETRAIN_SAMPLES / PRE_BATCH ))
-  FT_STEPS=$(( FINETUNE_SAMPLES / FT_BATCH ))
   PRE_OUT="$OUT_ROOT/${SZ}_pretrain"
   FT_OUT="$OUT_ROOT/${SZ}_finetune"
 
-  say "SIZE=$SZ  base=$BASE num_res=$NR  |  pretrain ${PRE_STEPS} x ${PRE_BATCH}  finetune ${FT_STEPS} x ${FT_BATCH}"
+  DO_PRE=0
+  for X in $PRETRAIN_SIZES; do [[ "$X" == "$SZ" ]] && DO_PRE=1; done
+  say "SIZE=$SZ  base=$BASE num_res=$NR  |  pretrain ${DO_PRE} (${PRE_STEPS} x ${PRE_BATCH})  finetune ${FT_STEPS} x ${FT_BATCH}"
 
   # ------------------------------------------------ stage 1: BSRGAN pretrain
-  if [[ "${SKIP_PRETRAIN:-0}" != "1" ]]; then
-    say "TRAIN ${SZ}_pretrain  (BSRGAN, ${PRETRAIN_SAMPLES} samples)"
+  if (( DO_PRE )) && [[ "${SKIP_PRETRAIN:-0}" != "1" ]]; then
+    say "TRAIN ${SZ}_pretrain  (BSRGAN, $(( PRE_STEPS * PRE_BATCH )) samples)"
     "$PY" -m diffusion.train_pixel --data-root "$DATA" --out "$PRE_OUT" \
       --backbone unet --size S --base "$BASE" --num-res "$NR" --native-lr 1 \
       --pretrain-root "$PRETRAIN_ROOT" --decoded-manifest "$MANIFEST" \
@@ -80,10 +86,10 @@ for SZ in $SIZES; do
 
   # ------------------------------------------------ stage 2: RealSR fine-tune
   INIT=""
-  if [[ -f "$PRE_OUT/ckpt_best.pt" ]]; then
+  if (( DO_PRE )) && [[ -f "$PRE_OUT/ckpt_best.pt" ]]; then
     INIT="--init $PRE_OUT/ckpt_best.pt"
   fi
-  say "TRAIN ${SZ}_finetune  (RealSR, ${FINETUNE_SAMPLES} samples)  init=${INIT:-none}"
+  say "TRAIN ${SZ}_finetune  (RealSR, $(( FT_STEPS * FT_BATCH )) samples)  init=${INIT:-none}"
   "$PY" -m diffusion.train_pixel --data-root "$DATA" --out "$FT_OUT" \
     --backbone unet --size S --base "$BASE" --num-res "$NR" --native-lr 1 \
     --decoded-manifest "$MANIFEST" $INIT \

@@ -108,6 +108,11 @@ class RealSRCropDataset(Dataset):
             hits = sum(1 for lp, hp, _ in self.pairs if self.store.has(lp) and self.store.has(hp))
             print(f"  RealSRCropDataset: {hits}/{len(self.pairs)} pairs from the decoded cache",
                   flush=True)
+            if hits == 0:
+                print(f"  WARNING: the decoded cache has {self.store.n_images} images but none "
+                      f"match this dataset's paths -- every item will decode from PNG. "
+                      f"Check that --data-root matches how precache_hr.py was run.",
+                      flush=True)
 
         # Decoding the PNGs on every __getitem__ caps the loader at a few hundred
         # samples/s -- far below what a 700-sample batch at 0.43 s/step needs.

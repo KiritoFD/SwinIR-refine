@@ -101,6 +101,10 @@ def parse_args():
     p.add_argument("--pretrain-root", default="",
                    help="HR image dir for SwinIR/BSRGAN-style synthetic pretraining")
     p.add_argument("--pretrain-limit", type=int, default=0, help="cap pretraining images (0 = all)")
+    p.add_argument("--pretrain-val-root", default="",
+                   help="held-out images for the PRETRAIN val (must NOT overlap --pretrain-root). "
+                        "Falls back to the RealSR split, which measures domain transfer rather "
+                        "than pretraining progress.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
     if not getattr(args, "data_root", ""):
@@ -172,8 +176,19 @@ def main():
 
         ds = BSRGANDataset(args.pretrain_root, args.lr_patch, args.scale, True,
                            args.pretrain_limit, args.seed, decoded_manifest=dm)
-        _, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
-        print(f"pretrain: {len(ds)} HR images from {args.pretrain_root}", flush=True)
+        # Validate on HELD-OUT images from the pretrain domain, degraded the same
+        # way.  Watching the RealSR val split during pretraining measures domain
+        # transfer, not whether pretraining is working -- and since it drove
+        # ckpt_best, the fine-tune was being initialised from whichever step
+        # happened to transfer best, i.e. noise.
+        if args.pretrain_val_root:
+            val_ds = BSRGANDataset(args.pretrain_val_root, args.lr_patch, args.scale, False,
+                                   0, args.seed, decoded_manifest=dm, deterministic=True)
+        else:
+            _, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
+        print(f"pretrain: {len(ds)} HR images from {args.pretrain_root}; "
+              f"val {0 if val_ds is None else len(val_ds)} from "
+              f"{args.pretrain_val_root or 'RealSR split (NOT recommended)'}", flush=True)
     else:
         ds, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
     # RealSR Train has only 390 usable pairs.  With batch >= len(ds) an epoch

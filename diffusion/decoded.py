@@ -45,7 +45,12 @@ class DecodedStore:
                 self.entries = json.loads(p.read_text())
                 for name, e in self.entries.items():
                     for i, it in enumerate(e["items"]):
-                        self.by_path[it["path"]] = (name, i)
+                        # precache_hr.py records whatever path it walked, which is
+                        # relative if --roots was relative.  Datasets may pass an
+                        # absolute --data-root (or vice versa), so normalise both
+                        # sides -- otherwise every lookup misses and the caller
+                        # silently falls back to decoding PNGs on every item.
+                        self.by_path[str(Path(it["path"]).resolve())] = (name, i)
 
     def __bool__(self) -> bool:
         return bool(self.entries)
@@ -59,11 +64,11 @@ class DecodedStore:
         return sum(e["bytes"] for e in self.entries.values()) / 1024**3
 
     def has(self, path: str) -> bool:
-        return str(path) in self.by_path
+        return str(Path(path).resolve()) in self.by_path
 
     def get(self, path: str) -> np.ndarray | None:
         """(H, W, 3) uint8 view into the blob, or None if this path is not cached."""
-        hit = self.by_path.get(str(path))
+        hit = self.by_path.get(str(Path(path).resolve()))
         if hit is None:
             return None
         name, idx = hit
