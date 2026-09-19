@@ -411,6 +411,7 @@ def main():
             expand=float(targs.get("ssm_expand", 2)),
             backend=str(targs.get("ssm_backend", "auto")),
             coord_channels=2 if use_coord else 0,
+            ssm_scale=int(targs.get("ssm_scale", 1)),
         ).to(device)
     else:
         model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)
