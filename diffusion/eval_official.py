@@ -205,6 +205,19 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
     lr_up = F.interpolate(lr_t, size=(hr_h, hr_w), mode="bicubic", align_corners=False).clamp(0, 1)
     if H != hr_h or W != hr_w:
         lr_up = F.pad(lr_up, (0, W - hr_w, 0, H - hr_h), mode="replicate")
+    coord_map = None
+    if int(getattr(model, "coord_channels", 0) or 0):
+        # absolute frame coordinates over the PADDED canvas; padded rows/cols
+        # clamp to the last valid index, matching the image's replicate padding.
+        # Each tile window slices its own sub-range, so a tile sees the SAME
+        # coordinates it would have seen inside the full frame during training.
+        ys = torch.arange(H, device=device).float().clamp_max(max(hr_h - 1, 1))
+        xs = torch.arange(W, device=device).float().clamp_max(max(hr_w - 1, 1))
+        vy = ys / max(hr_h - 1, 1) * 2.0 - 1.0
+        ux = xs / max(hr_w - 1, 1) * 2.0 - 1.0
+        coord_map = torch.stack(
+            [vy[:, None].expand(H, W), ux[None, :].expand(H, W)], dim=0
+        ).unsqueeze(0)  # (1,2,H,W)
     core = max(tile * scale - (tile * scale) % align, align)
     wins = _tile_windows(H, W, core, pad, align)
     t0 = torch.zeros(1, device=device)
@@ -215,10 +228,14 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
 
     for shape, group in by_shape.items():
         for chunk in _chunked(group, max(1, tile_batch)):
-            cond = torch.cat([lr_up[:, :, y0:y1, x0:x1] for (y0, x0, y1, x1) in chunk], dim=0)
+            rgb = torch.cat([lr_up[:, :, y0:y1, x0:x1] for (y0, x0, y1, x1) in chunk], dim=0)
+            cond = rgb
+            if coord_map is not None:
+                cw = torch.cat([coord_map[:, :, y0:y1, x0:x1] for (y0, x0, y1, x1) in chunk], dim=0)
+                cond = torch.cat([rgb, cw], dim=1)
             with _amp(device, bf16):
                 if objective == "reg":
-                    rec = cond + model(cond, t0.expand(cond.shape[0]))
+                    rec = rgb + model(cond, t0.expand(cond.shape[0]))
                 else:
                     z = sample_flow(
                         model,
@@ -229,12 +246,12 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
                         device=device,
                         seed=seed,
                     )
-                    rec = (z * 2.0 + cond) if residual else z
-            # the fp32 `cond` promotes the sum back to fp32 automatically
+                    rec = (z * 2.0 + rgb) if residual else z
+            # the fp32 `rgb` promotes the sum back to fp32 automatically
             rec = rec.clamp(0, 1).float()
             for i, (y0, x0, y1, x1) in enumerate(chunk):
                 _accumulate(out, acc, rec[i : i + 1], H, W, pad, y0, x0)
-            del cond, rec
+            del cond, rgb, rec
     out = out / acc.clamp(min=1e-6)
     return to_u8(out[0, :, :hr_h, :hr_w])
 
@@ -360,6 +377,9 @@ def main():
         return tuple(int(x) for x in parts) or tuple(int(x) for x in dflt.split(","))
 
     backbone = str(targs.get("backbone", "dit"))
+    use_coord = bool(targs.get("coord", False)) and mode == "pixel"
+    if use_coord and objective == "flow":
+        raise SystemExit("this ckpt was trained with --coord, which is reg-only")
     if backbone == "unet":
         # native_lr was -1 (auto) unless explicitly set; mirror train_pixel's rule
         ns = int(targs.get("native_lr", -1))
@@ -376,6 +396,8 @@ def main():
             ffn=bool(targs.get("ffn", False)),
             ffn_ratio=float(targs.get("ffn_ratio", 2.66)),
             align=int(targs.get("align", 128)),
+            coord_channels=2 if use_coord else 0,
+            freq_route=bool(targs.get("freq_route", False)),
         ).to(device)
     else:
         model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)
