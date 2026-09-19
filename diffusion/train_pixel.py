@@ -64,6 +64,29 @@ def parse_args():
                    help="channel alignment the gated FFN enforces. Must divide every "
                         "level's width, so base 64 needs align=64 while base 128 can "
                         "keep 128 (which is the one that runs at full GEMM efficiency).")
+    p.add_argument("--coord", action="store_true",
+                   help="concatenate absolute frame coordinates (2ch, [-1,1]^2) to the "
+                        "input so the network can break conv translation invariance "
+                        "(real lens degradation is non-stationary over the frame). "
+                        "UNet reg only; stem weights on the coord channels are "
+                        "zero-init, so step 0 is exactly the no-coord model.")
+    p.add_argument("--freq-route", action="store_true",
+                   help="per-ResBlock soft frequency routing: residual delta = "
+                        "alpha*texture_conv + (1-alpha)*narrow smooth branch, "
+                        "alpha = sigmoid(conv1x1(Sobel energy of the block input)). "
+                        "The FFN's fix: capacity goes where high frequencies live.")
+    p.add_argument("--adv-deg", action="store_true",
+                   help="with --pretrain-root: replace fixed BSRGAN degradation with "
+                        "the differentiable adversary (diffusion.adversarial): "
+                        "min_theta max_phi L(F(G_phi(hr)), hr). See that module.")
+    p.add_argument("--adv-sigma-max", type=float, default=0.12,
+                   help="noise ceiling of the adversary (in [0,1] RGB units). "
+                        "0.12 ~= BSRGAN's max Gaussian sigma at x2.")
+    p.add_argument("--adv-lr", type=float, default=1e-4, help="adversary (phi) lr")
+    p.add_argument("--adv-inner", type=int, default=0,
+                   help="0 = simultaneous GDA (one forward, phi ascends on the "
+                        "flipped gradient). N>0 = N true inner ascent steps with "
+                        "freshly regenerated LR before each theta step (N+1x cost).")
     p.add_argument("--num-res", type=int, default=2, help="unet: residual blocks per level")
     p.add_argument("--attn-levels", default="2,3", help="unet: levels that get self-attention")
     p.add_argument("--native-lr", type=int, default=-1,
@@ -118,6 +141,17 @@ def parse_args():
     args = p.parse_args()
     if not getattr(args, "data_root", ""):
         args.data_root = default_root()
+    # the three new arms are UNet-reg features; keep invalid combos from
+    # starting a 4-hour run only to die at step 0
+    if args.coord and (args.backbone != "unet" or args.objective != "reg"):
+        raise SystemExit("--coord requires --backbone unet --objective reg")
+    if args.coord and args.pretrain_root:
+        raise SystemExit("--coord + --pretrain-root is not wired (BSRGANDataset has no "
+                         "frame coordinates yet); pretrain first, then --init finetune with --coord")
+    if args.freq_route and args.backbone != "unet":
+        raise SystemExit("--freq-route requires --backbone unet")
+    if args.adv_deg and not args.pretrain_root:
+        raise SystemExit("--adv-deg requires --pretrain-root (it replaces BSRGAN there)")
     return args
 
 
@@ -128,15 +162,19 @@ def run_val(net, val_ds, device, objective, steps, max_n, seed, residual):
     ys, ss = [], []
     n = len(val_ds) if max_n <= 0 else min(len(val_ds), max_n)
     t0 = torch.zeros(1, device=device)
+    coord_ch = int(getattr(net, "coord_channels", 0) or 0)
     for i in range(n):
         b = val_ds[i]
         lr = b["lr"].unsqueeze(0).to(device)
         hr = b["hr"].unsqueeze(0).to(device)
         lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
+        inp = lr_up
+        if coord_ch and b.get("coord") is not None:
+            inp = torch.cat([lr_up, b["coord"].unsqueeze(0).float().to(device)], dim=1)
         if objective == "reg":
-            rec = (lr_up + net(lr_up, t0)).clamp(0, 1)
+            rec = (lr_up + net(inp, t0)).clamp(0, 1)
         else:
-            z = sample_flow(net, lr_up.shape, cond=lr_up, steps=steps, solver="heun", device=device, seed=seed)
+            z = sample_flow(net, lr_up.shape, cond=inp, steps=steps, solver="heun", device=device, seed=seed)
             rec = (z * 2.0 + lr_up).clamp(0, 1) if residual else z.clamp(0, 1)
         sr_u8 = (rec[0] * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
         hr_u8 = (hr[0] * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
@@ -145,6 +183,35 @@ def run_val(net, val_ds, device, objective, steps, max_n, seed, residual):
         ss.append(m["ssim_y"])
     net.train()
     return float(np.mean(ys)), float(np.mean(ss))
+
+
+@torch.no_grad()
+def run_val_adv(net, adv, val_ds, device, max_n, seed):
+    """Y-PSNR on held-out HR images degraded by the CURRENT adversary.
+
+    Deterministic per item (fixed eps from the item index) so numbers are
+    comparable across steps even though G_phi itself is moving.  This is the
+    pretrain-domain val that drives ckpt_best in --adv-deg mode: robustness on
+    the hardest degradation the adversary can currently express.
+    """
+    net.eval()
+    ys = []
+    n = len(val_ds) if max_n <= 0 else min(len(val_ds), max_n)
+    t0 = torch.zeros(1, device=device)
+    for i in range(n):
+        b = val_ds[i]
+        hr = b["hr"].unsqueeze(0).to(device)
+        g = torch.Generator().manual_seed(seed * 100003 + int(b["idx"]))
+        eps = torch.randn(1, 3, hr.shape[2] // adv.scale, hr.shape[3] // adv.scale,
+                          generator=g).to(device)
+        lr = adv(hr, eps=eps)
+        lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
+        rec = (lr_up + net(lr_up, t0)).clamp(0, 1)
+        sr_u8 = (rec[0] * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
+        hr_u8 = (hr[0] * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
+        ys.append(official_pair_metrics(sr_u8, hr_u8)["psnr_y"])
+    net.train()
+    return float(np.mean(ys))
 
 
 def _worker_init(_worker_id: int):
@@ -177,25 +244,38 @@ def main():
 
     dm = args.decoded_manifest or None
     _real = RealSRCropDataset(args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True,
-                             cache=bool(args.cache_data), decoded_manifest=dm)
+                              cache=bool(args.cache_data), decoded_manifest=dm, coord=args.coord)
+    adv = None
     if args.pretrain_root:
         # train on BSRGAN-degraded DIV2K/Flickr2K, but KEEP the RealSR val split
         # so we can watch zero-shot transfer while pretraining.
-        from .bsrgan import BSRGANDataset
+        if args.adv_deg:
+            from .adversarial import HQPatchDataset
 
-        ds = BSRGANDataset(args.pretrain_root, args.lr_patch, args.scale, True,
-                           args.pretrain_limit, args.seed, decoded_manifest=dm)
-        # Validate on HELD-OUT images from the pretrain domain, degraded the same
-        # way.  Watching the RealSR val split during pretraining measures domain
-        # transfer, not whether pretraining is working -- and since it drove
-        # ckpt_best, the fine-tune was being initialised from whichever step
-        # happened to transfer best, i.e. noise.
-        if args.pretrain_val_root:
-            val_ds = BSRGANDataset(args.pretrain_val_root, args.lr_patch, args.scale, False,
-                                   0, args.seed, decoded_manifest=dm, deterministic=True)
+            ds = HQPatchDataset(args.pretrain_root, args.lr_patch * args.scale, True,
+                                args.pretrain_limit, args.seed, decoded_manifest=dm)
+            if args.pretrain_val_root:
+                val_ds = HQPatchDataset(args.pretrain_val_root, args.lr_patch * args.scale, False,
+                                        0, args.seed, decoded_manifest=dm, deterministic=True)
+            else:
+                _, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
         else:
-            _, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
-        print(f"pretrain: {len(ds)} HR images from {args.pretrain_root}; "
+            from .bsrgan import BSRGANDataset
+
+            ds = BSRGANDataset(args.pretrain_root, args.lr_patch, args.scale, True,
+                               args.pretrain_limit, args.seed, decoded_manifest=dm)
+            # Validate on HELD-OUT images from the pretrain domain, degraded the same
+            # way.  Watching the RealSR val split during pretraining measures domain
+            # transfer, not whether pretraining is working -- and since it drove
+            # ckpt_best, the fine-tune was being initialised from whichever step
+            # happened to transfer best, i.e. noise.
+            if args.pretrain_val_root:
+                val_ds = BSRGANDataset(args.pretrain_val_root, args.lr_patch, args.scale, False,
+                                       0, args.seed, decoded_manifest=dm, deterministic=True)
+            else:
+                _, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
+        print(f"pretrain: {len(ds)} HR images from {args.pretrain_root}"
+              f"{' (adversarial min-max)' if args.adv_deg else ' (BSRGAN)'}; "
               f"val {0 if val_ds is None else len(val_ds)} from "
               f"{args.pretrain_val_root or 'RealSR split (NOT recommended)'}", flush=True)
     else:
@@ -239,9 +319,12 @@ def main():
         kw["ffn"] = bool(args.ffn)
         kw["ffn_ratio"] = float(args.ffn_ratio)
         kw["align"] = int(args.align)
+        kw["coord_channels"] = 2 if args.coord else 0
+        kw["freq_route"] = bool(args.freq_route)
         model = build_unet(args.size, **kw).to(device)
         print(f"  unet native_lr={bool(ns)} in_stride={kw['in_stride']} "
               f"out_scale={kw['out_scale']} align={model.align} ffn={bool(args.ffn)} "
+              f"coord={bool(args.coord)} freq_route={bool(args.freq_route)} "
               f"chans={model.chans}", flush=True)
     else:
         if args.hidden:
@@ -262,6 +345,19 @@ def main():
     model_raw = model
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp)
+
+    adv = None
+    opt_phi = None
+    if args.adv_deg:
+        from .adversarial import AdvDegradation
+
+        adv = AdvDegradation(scale=args.scale, sigma_max=args.adv_sigma_max).to(device)
+        opt_phi = torch.optim.Adam(adv.parameters(), lr=args.adv_lr)
+        print(f"  adversary: G_phi with {adv.n_kernels} bank kernels, "
+              f"sigma_max={args.adv_sigma_max}, schedule="
+              f"{'simultaneous GDA' if args.adv_inner == 0 else f'{args.adv_inner} inner steps'}",
+              flush=True)
+
     ema = None
     if args.ema > 0:
         ema = copy.deepcopy(model).eval()
@@ -307,11 +403,11 @@ def main():
     amp_dtype = torch.bfloat16 if args.amp else torch.float32
     t_zeros = torch.zeros(1, device=device)
 
-    def forward_loss(lr_up, hr):
+    def forward_loss(inp, lr_up, hr):
         if is_flow:
             x0 = (hr - lr_up).clamp(-1, 1) * 0.5 if args.residual else hr
-            return flow_loss(model, x0, lr_up, t_mode=args.t_sampler)[0]
-        res = model(lr_up, t_zeros.expand(lr_up.shape[0]))
+            return flow_loss(model, x0, inp, t_mode=args.t_sampler)[0]
+        res = model(inp, t_zeros.expand(lr_up.shape[0]))
         pred = (lr_up + res).clamp(0, 1)
         if args.reg_loss == "l2":
             return F.mse_loss(pred, hr)
@@ -328,15 +424,49 @@ def main():
         except StopIteration:
             it = iter(loader)
             batch = next(it)
-        lr = batch["lr"].to(device, non_blocking=True)
-        hr = batch["hr"].to(device, non_blocking=True)
+        if adv is not None:
+            hr = batch["hr"].to(device, non_blocking=True)
+        else:
+            lr = batch["lr"].to(device, non_blocking=True)
+            hr = batch["hr"].to(device, non_blocking=True)
+        coord = batch["coord"].to(device, non_blocking=True) if args.coord else None
         cur_lr = lr_at(step, args.lr, args.warmup, args.steps)
         for g in opt.param_groups:
             g["lr"] = cur_lr
 
+        if adv is not None and args.adv_inner > 0:
+            # true alternation: N real ascent steps for phi through the FROZEN
+            # net, each with a freshly regenerated worst-case LR; then the outer
+            # descent step below runs against the updated adversary
+            for p in model_raw.parameters():
+                p.requires_grad_(False)
+            for _ in range(args.adv_inner):
+                opt_phi.zero_grad(set_to_none=True)
+                lr_i = adv(hr)
+                lr_up_i = F.interpolate(lr_i, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
+                with torch.amp.autocast("cuda", enabled=args.amp, dtype=amp_dtype):
+                    loss_i = forward_loss(lr_up_i, lr_up_i, hr)
+                scaler.scale(loss_i).backward()
+                scaler.unscale_(opt_phi)
+                for p in adv.parameters():
+                    if p.grad is not None:
+                        p.grad.neg_()
+                torch.nn.utils.clip_grad_norm_(adv.parameters(), 1.0)
+                scaler.step(opt_phi)
+                scaler.update()
+            for p in model_raw.parameters():
+                p.requires_grad_(True)
+            opt.zero_grad(set_to_none=True)
+            lr = adv(hr)
+        elif adv is not None:
+            # simultaneous GDA: one forward/backward below serves both players
+            # (phi ASCENDS by negating its grads before its step)
+            lr = adv(hr)
+
         lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
+        inp = torch.cat([lr_up, coord], dim=1) if coord is not None else lr_up
         with torch.amp.autocast("cuda", enabled=args.amp, dtype=amp_dtype):
-            loss = forward_loss(lr_up, hr)
+            loss = forward_loss(inp, lr_up, hr)
         if not torch.isfinite(loss):
             opt.zero_grad(set_to_none=True)
             step += 1
@@ -344,7 +474,15 @@ def main():
         scaler.scale(loss).backward()
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        if adv is not None:
+            scaler.unscale_(opt_phi)
+            for p in adv.parameters():
+                if p.grad is not None:
+                    p.grad.neg_()
+            torch.nn.utils.clip_grad_norm_(adv.parameters(), 1.0)
         scaler.step(opt)
+        if adv is not None:
+            scaler.step(opt_phi)
         scaler.update()
         opt.zero_grad(set_to_none=True)
         ema_update()
@@ -361,10 +499,14 @@ def main():
 
         if args.eval_every > 0 and val_ds is not None and ((step + 1) % args.eval_every == 0):
             net = ema if ema is not None else model_raw
-            psnr, ssim = run_val(
-                net, val_ds, device, args.objective, max(1, args.val_eval_steps),
-                args.val_pairs, args.seed, bool(args.residual),
-            )
+            if adv is not None and args.pretrain_val_root:
+                psnr = run_val_adv(net, adv, val_ds, device, args.val_pairs, args.seed)
+                ssim = 0.0
+            else:
+                psnr, ssim = run_val(
+                    net, val_ds, device, args.objective, max(1, args.val_eval_steps),
+                    args.val_pairs, args.seed, bool(args.residual),
+                )
             print(f"  VAL {step+1}: Y {psnr:.3f}/{ssim:.4f} n={min(len(val_ds), args.val_pairs)}", flush=True)
             with (out / "val_log.jsonl").open("a") as f:
                 f.write(json.dumps({"step": step + 1, "psnr_y": psnr, "ssim_y": ssim}) + "\n")

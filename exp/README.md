@@ -1,5 +1,7 @@
 # Experiment notes
 
+- [STAGE_SUMMARY.md](STAGE_SUMMARY.md) — **阶段性总结：全项目尝试清单与判定（有效/无效）**（start here）
+- [NEW_ARMS.md](NEW_ARMS.md) — 三新方案（坐标注入 / 频域路由 / 对抗退化挖掘）实现与 A/B 设计
 - [OFFICIAL_EVAL.md](OFFICIAL_EVAL.md) — official full-set results (authoritative)
 - [VERIFIED_SUMMARY.md](VERIFIED_SUMMARY.md) — verified gains & best recipe
 - [EVAL_PROTOCOL.md](EVAL_PROTOCOL.md) — official RealSR Test.m protocol

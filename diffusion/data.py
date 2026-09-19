@@ -77,6 +77,29 @@ def _to_rgb_u8(path: str) -> np.ndarray:
         return np.asarray(im.convert("RGB"), dtype=np.uint8)
 
 
+def _coord_map(h: int, w: int, top: int, left: int, H_full: int, W_full: int) -> np.ndarray:
+    """(2, h, w) absolute frame coordinates of an HR crop, float32 in [-1, 1].
+
+    Real-lens degradation is non-stationary over the FRAME (field curvature,
+    vignetting, astrometry at the edges), which a weight-sharing conv can never
+    see because every pixel gets the same W.  Feeding the crop's position inside
+    the full HR image lets the network condition its inverse on it.  Coordinates
+    are normalised per frame so every image spans the same [-1, 1]; indices are
+    clamped for the (rare) reflect-padded small-image path so padding repeats
+    the edge coordinate instead of inventing one.
+
+    The caller applies the SAME flips/rot90 to this map as to the image: the
+    map labels where each pixel's CONTENT lives in the frame, so it must move
+    with the content.
+    """
+    ys = np.minimum(np.arange(top, top + h), H_full - 1).astype(np.float32)
+    xs = np.minimum(np.arange(left, left + w), W_full - 1).astype(np.float32)
+    vy = ys / max(H_full - 1, 1) * 2.0 - 1.0
+    ux = xs / max(W_full - 1, 1) * 2.0 - 1.0
+    yy, xx = np.meshgrid(vy, ux, indexing="ij")
+    return np.stack([yy, xx]).astype(np.float32)
+
+
 class RealSRCropDataset(Dataset):
     """Random LR crop of size lr_patch; HR crop is scale× larger. RGB float in [0,1]."""
 
@@ -91,11 +114,13 @@ class RealSRCropDataset(Dataset):
         max_pairs: int | None = None,
         cache: bool = False,
         decoded_manifest: str | None = None,
+        coord: bool = False,
     ):
         from .decoded import DecodedStore
 
         self.scale = scale
         self.lr_patch = lr_patch
+        self.coord = coord
         self.augment = augment and split.lower() == "train"
         self.pairs = build_index(root, cameras, split, scale)
         if not self.pairs:
@@ -142,6 +167,7 @@ class RealSRCropDataset(Dataset):
         lh, lw = lr_full.shape[:2]
         hh, hw = hr_full.shape[:2]
         lw, lh = min(lw, hw // sc), min(lh, hh // sc)
+        top = left = 0
         if lw < ps or lh < ps:
             lr = lr_full[: max(lh, 1), : max(lw, 1)]
             hr = hr_full[: max(lh, 1) * sc, : max(lw, 1) * sc]
@@ -163,22 +189,39 @@ class RealSRCropDataset(Dataset):
                 left = (lw - ps) // 2
             lr = lr_full[top : top + ps, left : left + ps]
             hr = hr_full[top * sc : (top + ps) * sc, left * sc : (left + ps) * sc]
+        fliph = flipv = rot = 0
         if self.augment:
             if random.random() < 0.5:
+                fliph = 1
                 lr = lr[:, ::-1].copy()
                 hr = hr[:, ::-1].copy()
             if random.random() < 0.5:
+                flipv = 1
                 lr = lr[::-1].copy()
                 hr = hr[::-1].copy()
             k = random.randint(0, 3)
             if k:
+                rot = k
                 lr = np.ascontiguousarray(np.rot90(lr, k))
                 hr = np.ascontiguousarray(np.rot90(hr, k))
 
         def to_t(a: np.ndarray) -> torch.Tensor:
             return torch.from_numpy(np.ascontiguousarray(a)).permute(2, 0, 1).float() / 255.0
 
-        return {"lr": to_t(lr), "hr": to_t(hr), "scale": sc}
+        out = {"lr": to_t(lr), "hr": to_t(hr), "scale": sc}
+        if self.coord:
+            ch, cw = hr.shape[:2]
+            # crop-local flips/rot90 must move the coordinate labels together
+            # with the content they describe
+            cm = _coord_map(ch, cw, top * sc, left * sc, hh, hw)
+            if fliph:
+                cm = cm[:, :, ::-1]
+            if flipv:
+                cm = cm[:, ::-1, :]
+            if rot:
+                cm = np.rot90(cm, rot, axes=(1, 2))
+            out["coord"] = torch.from_numpy(np.ascontiguousarray(cm))
+        return out
 
 
 class LatentCropDataset(Dataset):

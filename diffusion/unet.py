@@ -71,16 +71,82 @@ class TimestepEmbedding(nn.Module):
 from .gated_ffn import SpatialGatedFFN
 
 
+class FreqRouter(nn.Module):
+    """Soft frequency router: alpha(x) = sigmoid(conv1x1(E(x))).
+
+    E is the local high-frequency energy of the block input -- a fixed Sobel
+    pair applied to the channel mean, then squared.  The only learned part is
+    the 1x1 that turns the (2-channel) gradient into a logit, so at init alpha
+    is a near-constant ~0.5 and the router specialises as the two branches wake
+    up.  alpha is a continuous scalar map (not a discrete token-MoE decision),
+    which is what keeps the output free of blocky routing artefacts.
+
+    Sobel runs on the channel MEAN of the normalised block input: the router
+    only needs one spatial saliency map, and a per-channel Sobel at full HR
+    would be a multi-hundred-MB transient for no extra routing information.
+    """
+
+    def __init__(self):
+        super().__init__()
+        kx = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]])
+        ky = kx.t().contiguous()
+        self.register_buffer("sob", torch.stack([kx, ky])[:, None])  # (2,1,3,3)
+        self.proj = nn.Conv2d(2, 1, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        m = x.mean(dim=1, keepdim=True)
+        g = F.conv2d(m, self.sob, padding=1)
+        # keep the two directional energies separate -- horizontal vs vertical
+        # gradient energy is exactly the astigmatism signal the router wants
+        e = g.pow(2)
+        return torch.sigmoid(self.proj(e))
+
+
+class SmoothBranch(nn.Module):
+    """The low-frequency expert: 1x1 bottleneck -> depthwise 3x3 -> 1x1 back.
+
+    r = 4 by default, so this branch has about half the parameters of one 3x3
+    conv and a strictly narrower hypothesis space -- the operational stand-in
+    for the "small Lipschitz constant" the routing design asks for.  The final
+    conv is zero-initialised like every other residual contributor.
+    """
+
+    def __init__(self, c: int, r: int = 4):
+        super().__init__()
+        h = max(8, c // r)
+        self.net = nn.Sequential(
+            nn.Conv2d(c, h, 1), nn.SiLU(),
+            nn.Conv2d(h, h, 3, padding=1, groups=h), nn.SiLU(),
+            nn.Conv2d(h, c, 1),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
 class ResBlock(nn.Module):
     """GroupNorm -> SiLU -> Conv -> (+temb) -> GroupNorm -> SiLU -> Conv -> + skip.
 
     The second conv is zero-initialised (as in DDPM's U-Net), so every block
     starts as an identity and a freshly built net reproduces its input.  That is
     what makes the reg arms start exactly at the bicubic floor.
+
+    With freq_route=True the residual delta becomes a per-pixel convex blend
+        delta = alpha * conv2(a) + (1 - alpha) * smooth(a)
+    where alpha = FreqRouter(x) is computed from the block INPUT (not the
+    post-norm features, so the router sees the same signal the block sees).
+    Both branches are zero-init, so identity-at-init is preserved; the texture
+    branch keeps the full-capacity convs, the smooth branch is the narrow
+    bottleneck above.  Unlike the gated FFN (whose expansion was channel-wide
+    and unconditionally on), the blend is bounded in [0, 1] and spatially
+    selective, which is the direct fix for the FFN's failure mode of amplifying
+    sensor noise in flat regions.
     """
 
     def __init__(self, cin: int, cout: int, t_dim: int, ffn: bool = False,
-                 ffn_ratio: float = 2.66, align: int = 128):
+                 ffn_ratio: float = 2.66, align: int = 128, freq_route: bool = False):
         super().__init__()
         self.norm1 = _gn(cin)
         self.conv1 = nn.Conv2d(cin, cout, 3, padding=1)
@@ -91,6 +157,8 @@ class ResBlock(nn.Module):
         # the gated FFN is the channel-mixing half; it is zero-initialised too, so
         # the block is still an identity at step 0 when it is enabled
         self.ffn = SpatialGatedFFN(cout, ffn_ratio, align) if ffn else None
+        self.router = FreqRouter() if freq_route else None
+        self.smooth = SmoothBranch(cout) if freq_route else None
         nn.init.zeros_(self.conv2.weight)
         nn.init.zeros_(self.conv2.bias)
         nn.init.zeros_(self.temb.weight)
@@ -99,7 +167,12 @@ class ResBlock(nn.Module):
     def forward(self, x: torch.Tensor, temb: torch.Tensor) -> torch.Tensor:
         h = self.conv1(F.silu(self.norm1(x)))
         h = h + self.temb(temb)[:, :, None, None]
-        h = self.conv2(F.silu(self.norm2(h)))
+        a = F.silu(self.norm2(h))
+        if self.router is not None:
+            alpha = self.router(x)
+            h = alpha * self.conv2(a) + (1.0 - alpha) * self.smooth(a)
+        else:
+            h = self.conv2(a)
         out = self.skip(x) + h
         return self.ffn(out) if self.ffn is not None else out
 
@@ -148,11 +221,14 @@ class UNet(nn.Module):
         ffn: bool = False,
         ffn_ratio: float = 2.66,
         align: int = 128,
+        coord_channels: int = 0,
+        freq_route: bool = False,
         **_unused,
     ):
         super().__init__()
         self.input_size = input_size
         self.in_channels = in_channels
+        self.coord_channels = int(coord_channels)
         # flow.py concats the condition as extra input channels and then slices
         # the output back to x0.shape[1]; mirror the DiT and emit in_channels.
         self.out_channels = out_channels or in_channels
@@ -181,7 +257,15 @@ class UNet(nn.Module):
         self.align = self.in_stride * (2 ** (L - 1)) * self.out_scale
 
         self.t_embed = TimestepEmbedding(t_dim)
-        self.stem = nn.Conv2d(in_channels, base, 3, stride=self.in_stride, padding=1)
+        # coord channels (absolute frame position, see dataset/train_pixel) are
+        # concatenated after the RGB input.  Their stem weights are zero-init so
+        # a coord model at step 0 is EXACTLY the no-coord model -- the position
+        # pathway has to earn its influence instead of perturbing the features
+        # from step one.
+        self.stem = nn.Conv2d(in_channels + self.coord_channels, base, 3,
+                              stride=self.in_stride, padding=1)
+        if self.coord_channels:
+            nn.init.zeros_(self.stem.weight[:, in_channels:])
 
         self.enc = nn.ModuleList()
         self.down = nn.ModuleList()
@@ -189,7 +273,8 @@ class UNet(nn.Module):
         for i, c in enumerate(chans):
             blocks = nn.ModuleList()
             for j in range(num_res):
-                blocks.append(ResBlock(prev if j == 0 else c, c, t_dim, self.ffn, self.ffn_ratio, align))
+                blocks.append(ResBlock(prev if j == 0 else c, c, t_dim, self.ffn,
+                                       self.ffn_ratio, align, freq_route))
             if i in attn_levels:
                 blocks.append(AttnBlock(c))
             self.enc.append(blocks)
@@ -197,9 +282,11 @@ class UNet(nn.Module):
             prev = c
 
         self.mid = nn.ModuleList(
-            [ResBlock(chans[-1], chans[-1], t_dim, self.ffn, self.ffn_ratio, align),
+            [ResBlock(chans[-1], chans[-1], t_dim, self.ffn,
+                      self.ffn_ratio, align, freq_route),
              AttnBlock(chans[-1]),
-             ResBlock(chans[-1], chans[-1], t_dim, self.ffn, self.ffn_ratio, align)]
+             ResBlock(chans[-1], chans[-1], t_dim, self.ffn,
+                      self.ffn_ratio, align, freq_route)]
         )
 
         # up[i]: c_{i+1} -> c_i (resolution x2).  dec[i] consumes cat(x, skip) = 2*c_i.
@@ -213,7 +300,8 @@ class UNet(nn.Module):
         for i in range(L):
             blocks = nn.ModuleList()
             for j in range(num_res):
-                blocks.append(ResBlock(2 * chans[i] if j == 0 else chans[i], chans[i], t_dim, self.ffn, self.ffn_ratio, align))
+                blocks.append(ResBlock(2 * chans[i] if j == 0 else chans[i], chans[i], t_dim, self.ffn,
+                                       self.ffn_ratio, align, freq_route))
             if i in attn_levels:
                 blocks.append(AttnBlock(chans[i]))
             self.dec.append(blocks)
