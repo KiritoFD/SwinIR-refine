@@ -60,6 +60,10 @@ def parse_args():
                         "residual block. Channel widths must then be 128-aligned, so use "
                         "--base 128 with it.")
     p.add_argument("--ffn-ratio", type=float, default=2.66)
+    p.add_argument("--align", type=int, default=128,
+                   help="channel alignment the gated FFN enforces. Must divide every "
+                        "level's width, so base 64 needs align=64 while base 128 can "
+                        "keep 128 (which is the one that runs at full GEMM efficiency).")
     p.add_argument("--num-res", type=int, default=2, help="unet: residual blocks per level")
     p.add_argument("--attn-levels", default="2,3", help="unet: levels that get self-attention")
     p.add_argument("--native-lr", type=int, default=-1,
@@ -234,6 +238,7 @@ def main():
         kw["out_scale"] = 2 if ns else 1
         kw["ffn"] = bool(args.ffn)
         kw["ffn_ratio"] = float(args.ffn_ratio)
+        kw["align"] = int(args.align)
         model = build_unet(args.size, **kw).to(device)
         print(f"  unet native_lr={bool(ns)} in_stride={kw['in_stride']} "
               f"out_scale={kw['out_scale']} align={model.align} ffn={bool(args.ffn)} "
