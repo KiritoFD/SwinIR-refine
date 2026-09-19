@@ -375,6 +375,7 @@ def main():
             out_scale=2 if ns else 1,
             ffn=bool(targs.get("ffn", False)),
             ffn_ratio=float(targs.get("ffn_ratio", 2.66)),
+            align=int(targs.get("align", 128)),
         ).to(device)
     else:
         model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)
