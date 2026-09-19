@@ -98,6 +98,10 @@ def parse_args():
     p.add_argument("--ssm-backend", default="auto", choices=["auto", "mamba_ssm", "torch"],
                    help="mamba: 'mamba_ssm' = fused CUDA kernel (if installed), "
                         "'torch' = pure-PyTorch chunked scan (exact, slower)")
+    p.add_argument("--ssm-scale", type=int, default=1, choices=[1, 2],
+                   help="mamba: 1 = scan at HR (stride-1; ~30 s/step for 16 blocks at "
+                        "HR128 -- measured), 2 = stride-2 stem, scan at LR (L 4x shorter, "
+                        "MambaIR's own design), pixel-shuffle head back to HR")
     p.add_argument("--native-lr", type=int, default=-1,
                    help="unet: run the encoder/decoder at LR scale and pixel-shuffle back up. "
                         "-1 auto (on for reg, off for flow), 0 off, 1 on")
@@ -346,11 +350,12 @@ def main():
         kw["expand"] = args.ssm_expand
         kw["backend"] = args.ssm_backend
         kw["coord_channels"] = 2 if args.coord else 0
+        kw["ssm_scale"] = args.ssm_scale
         model = build_mambasr(args.size, **kw).to(device)
         print(f"  mamba dim={model.dim} groups={args.num_groups} blocks/RG={args.num_res} "
               f"state={args.ssm_state} expand={args.ssm_expand} backend={model.backend} "
-              f"(mamba_ssm_available={mamba_ssm_available()}) coord={bool(args.coord)}",
-              flush=True)
+              f"scale={args.ssm_scale} (mamba_ssm_available={mamba_ssm_available()}) "
+              f"coord={bool(args.coord)}", flush=True)
     else:
         if args.hidden:
             kw["hidden_size"] = args.hidden

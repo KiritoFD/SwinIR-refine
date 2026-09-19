@@ -302,6 +302,7 @@ class MambaSR(nn.Module):
         backend: str = "auto",
         use_checkpoint: bool = False,
         coord_channels: int = 0,
+        ssm_scale: int = 1,
         **_unused,
     ):
         super().__init__()
@@ -313,10 +314,18 @@ class MambaSR(nn.Module):
         self.dim = dim
         self.backend = backend if backend != "auto" else \
             ("mamba_ssm" if mamba_ssm_available() else "torch")
+        self.ssm_scale = int(ssm_scale)
+        # ssm_scale=2 scans at LR scale (MambaIR's own design): the scan cost is
+        # linear in L, and HR128 crops give L=16384 -- measured 0.49s per block
+        # per direction-batch on a 4090 (vs 0.09s at L=4096), i.e. ~30 s/step for
+        # the user-spec 16 blocks, which is a 7-day A/B.  With a stride-2 stem
+        # the same topology runs at 1.5 s/step.  High frequencies lost to the
+        # 2x decimation are re-gained by the pixel-shuffle head (zero-init, so
+        # step 0 is still exactly the bicubic floor).
+        self.align = self.ssm_scale  # stem stride; eval pads to multiples of this
 
-        # coord channels work exactly like the U-Net's: zero-init stem slice, so
-        # a coord mamba at step 0 IS the no-coord mamba
-        self.stem = nn.Conv2d(in_channels + self.coord_channels, dim, 3, padding=1)
+        self.stem = nn.Conv2d(in_channels + self.coord_channels, dim, 3,
+                              stride=self.ssm_scale, padding=1)
         if self.coord_channels:
             nn.init.zeros_(self.stem.weight[:, in_channels:])
 
@@ -325,7 +334,7 @@ class MambaSR(nn.Module):
              for _ in range(num_groups)]
         )
         self.out_norm = nn.LayerNorm(dim)
-        self.out_conv = nn.Conv2d(dim, self.out_channels, 3, padding=1)
+        self.out_conv = nn.Conv2d(dim, self.out_channels * self.ssm_scale ** 2, 3, padding=1)
         nn.init.zeros_(self.out_conv.weight)
         nn.init.zeros_(self.out_conv.bias)
 
@@ -334,7 +343,10 @@ class MambaSR(nn.Module):
         for g in self.groups:
             h = g(h)
         h = self.out_norm(h.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
-        return self.out_conv(h)
+        h = self.out_conv(h)
+        if self.ssm_scale > 1:
+            h = F.pixel_shuffle(h, self.ssm_scale)
+        return h
 
 
 def build_mambasr(size: str = "S", **kw) -> MambaSR:

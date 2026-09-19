@@ -5,14 +5,12 @@
 #           (with BSRGAN pretrain the line tops out at 34.1988)
 #
 #   M1 mamba_c128   dim 128, 4 RG x 4 VSS, d_state 16, expand 2  (2.75M)
-#                   the user-spec topology; NOTE the real param count is
-#                   2.75M, not 25-30M (Mamba blocks are projection-lean)
-#   M2 mamba_c256   dim 256, same topology                        (10.48M)
-#                   capacity-matched to the "inflection >10M" finding
-#
-# Sample budget matches the anchor's exactly (1.28M = batch x steps):
-#   CUDA kernel available (mamba_ssm):  c128 batch 128 x 10000 (anchor-exact)
-#   pure-torch scan fallback:           c128/c256 batch 64 x 20000
+#                   the user-spec topology.  Scanned at LR scale (--ssm-scale 2,
+#                   MambaIR's own design): stride-1 at HR128 was MEASURED at
+#                   ~30 s/step (L=16384 x 4 directions x 16 blocks) = a 7-day
+#                   A/B, vs 1.5 s/step at L=4096.  Protocol: batch 32 x 15000
+#                   (480k samples, ~37% of the anchor's budget -- a class probe,
+#                   not a full-budget arm; wall clock ~6 h).
 # Everything else verbatim from the anchor recipe (lr 3e-4, warmup 500, EMA
 # 0.999, amp, val 16 pairs, patience 15).
 #
@@ -41,15 +39,15 @@ wait_gpu() {
 }
 
 if "$PY" -c "import mamba_ssm" 2>/dev/null; then
-  BACKEND="mamba_ssm"; C128_BATCH=128; C128_STEPS=10000
+  BACKEND="mamba_ssm"
 else
-  BACKEND="torch";     C128_BATCH=64;  C128_STEPS=20000
+  BACKEND="torch"
 fi
-say "mamba backend=$BACKEND  c128 protocol: batch $C128_BATCH x $C128_STEPS"
+say "mamba backend=$BACKEND  protocol (both arms): batch 64 x 20000 (1.28M samples)"
 
 RECIPE="--backbone mamba --objective reg --residual 1 \
   --decoded-manifest data/decoded/manifest.json --ssm-backend $BACKEND \
-  --num-groups 4 --num-res 4 --ssm-state 16 --ssm-expand 2 \
+  --num-groups 4 --num-res 4 --ssm-state 16 --ssm-expand 2 --ssm-scale 2 \
   --lr-patch 64 --amp --num-workers 12 --cache-data 0 --grad-ckpt \
   --lr 3e-4 --warmup 500 \
   --eval-every 1000 --val-pairs 16 --patience 15 --min-steps 3000 \
@@ -78,13 +76,13 @@ train_and_eval() {  # $1 name, $2 batch, $3 steps, rest = extra flags
 T0=$(date +%s)
 
 DIM=128
-train_and_eval mamba_c128 "$C128_BATCH" "$C128_STEPS"
+train_and_eval mamba_c128 32 15000
 
-if [ "${RUN_C256:-0}" = "1" ] || [ "$BACKEND" = "mamba_ssm" ]; then
+if [ "${RUN_C256:-0}" = "1" ]; then
   DIM=256
-  train_and_eval mamba_c256 64 20000
+  train_and_eval mamba_c256 32 15000
 else
-  say "SKIP mamba_c256 -- pure-torch scan is ~5x slower; set RUN_C256=1 to force"
+  say "SKIP mamba_c256 -- set RUN_C256=1 to force (~12 h at this config)"
 fi
 
 say "MAMBA ARMS DONE  total $(( ($(date +%s) - T0) / 60 )) min"
