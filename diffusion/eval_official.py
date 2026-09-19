@@ -399,6 +399,19 @@ def main():
             coord_channels=2 if use_coord else 0,
             freq_route=bool(targs.get("freq_route", False)),
         ).to(device)
+    elif backbone == "mamba":
+        from .mamba_sr import build_mambasr
+
+        model = build_mambasr(
+            size, input_size=input_size, in_channels=in_ch,
+            dim=int(targs.get("base", 0) or 0) or None,
+            num_groups=int(targs.get("num_groups", 4)),
+            num_res=int(targs.get("num_res", 4)),
+            d_state=int(targs.get("ssm_state", 16)),
+            expand=float(targs.get("ssm_expand", 2)),
+            backend=str(targs.get("ssm_backend", "auto")),
+            coord_channels=2 if use_coord else 0,
+        ).to(device)
     else:
         model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)
     model.load_state_dict(ck["model"])

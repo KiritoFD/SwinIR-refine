@@ -37,6 +37,7 @@ from torch.utils.data import DataLoader, RandomSampler
 from .data import RealSRCropDataset, make_split
 from .data import default_root
 from .dit import build_dit
+from .mamba_sr import build_mambasr, mamba_ssm_available
 from .unet import build_unet
 from .flow import flow_loss, sample_flow
 from .metrics import official_pair_metrics
@@ -48,8 +49,9 @@ def parse_args():
     p.add_argument("--data-root", default="", help="auto-detected if empty")
     p.add_argument("--out", default=r"G:\RealSR\experiments\diffusion\pixel_dit")
     p.add_argument("--objective", default="flow", choices=["flow", "reg"])
-    p.add_argument("--backbone", default="dit", choices=["dit", "unet"],
-                   help="dit = token transformer; unet = conv encoder/decoder with skips")
+    p.add_argument("--backbone", default="dit", choices=["dit", "unet", "mamba"],
+                   help="dit = token transformer; unet = conv encoder/decoder with skips; "
+                        "mamba = stride-1 VSS (2D selective scan), reg-only")
     p.add_argument("--size", default="S", choices=["XS", "S", "M", "B"])
     p.add_argument("--patch", type=int, default=2)
     # U-Net only (ignored by the DiT path)
@@ -87,8 +89,15 @@ def parse_args():
                    help="0 = simultaneous GDA (one forward, phi ascends on the "
                         "flipped gradient). N>0 = N true inner ascent steps with "
                         "freshly regenerated LR before each theta step (N+1x cost).")
-    p.add_argument("--num-res", type=int, default=2, help="unet: residual blocks per level")
+    p.add_argument("--num-res", type=int, default=2, help="unet: residual blocks per level; "
+                   "mamba: VSS blocks per residual group")
     p.add_argument("--attn-levels", default="2,3", help="unet: levels that get self-attention")
+    p.add_argument("--num-groups", type=int, default=4, help="mamba: residual groups")
+    p.add_argument("--ssm-state", type=int, default=16, help="mamba: SSM state dim (d_state)")
+    p.add_argument("--ssm-expand", type=float, default=2, help="mamba: channel expansion E")
+    p.add_argument("--ssm-backend", default="auto", choices=["auto", "mamba_ssm", "torch"],
+                   help="mamba: 'mamba_ssm' = fused CUDA kernel (if installed), "
+                        "'torch' = pure-PyTorch chunked scan (exact, slower)")
     p.add_argument("--native-lr", type=int, default=-1,
                    help="unet: run the encoder/decoder at LR scale and pixel-shuffle back up. "
                         "-1 auto (on for reg, off for flow), 0 off, 1 on")
@@ -150,6 +159,8 @@ def parse_args():
                          "frame coordinates yet); pretrain first, then --init finetune with --coord")
     if args.freq_route and args.backbone != "unet":
         raise SystemExit("--freq-route requires --backbone unet")
+    if args.backbone == "mamba" and args.objective != "reg":
+        raise SystemExit("--backbone mamba is reg-only (the scan ignores t)")
     if args.adv_deg and not args.pretrain_root:
         raise SystemExit("--adv-deg requires --pretrain-root (it replaces BSRGAN there)")
     return args
@@ -326,6 +337,20 @@ def main():
               f"out_scale={kw['out_scale']} align={model.align} ffn={bool(args.ffn)} "
               f"coord={bool(args.coord)} freq_route={bool(args.freq_route)} "
               f"chans={model.chans}", flush=True)
+    elif args.backbone == "mamba":
+        if args.base:
+            kw["dim"] = args.base
+        kw["num_groups"] = args.num_groups
+        kw["num_res"] = args.num_res
+        kw["d_state"] = args.ssm_state
+        kw["expand"] = args.ssm_expand
+        kw["backend"] = args.ssm_backend
+        kw["coord_channels"] = 2 if args.coord else 0
+        model = build_mambasr(args.size, **kw).to(device)
+        print(f"  mamba dim={model.dim} groups={args.num_groups} blocks/RG={args.num_res} "
+              f"state={args.ssm_state} expand={args.ssm_expand} backend={model.backend} "
+              f"(mamba_ssm_available={mamba_ssm_available()}) coord={bool(args.coord)}",
+              flush=True)
     else:
         if args.hidden:
             kw["hidden_size"] = args.hidden
@@ -335,8 +360,9 @@ def main():
             kw["num_heads"] = args.heads
         model = build_dit(args.size, **kw).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
+    _name = {"unet": "PixelUNet", "dit": "PixelDiT", "mamba": "MambaSR"}[args.backbone]
     print(
-        f"{'PixelUNet' if args.backbone == 'unet' else 'PixelDiT'}-{args.size} {n_params:.2f}M  "
+        f"{_name}-{args.size} {n_params:.2f}M  "
         f"backbone={args.backbone} objective={args.objective}  HR={hr_px} "
         f"in_ch={in_ch} residual={bool(args.residual)} train={len(ds)} val={0 if val_ds is None else len(val_ds)}",
         flush=True,
