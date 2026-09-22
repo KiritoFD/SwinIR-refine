@@ -202,11 +202,33 @@ def _naive_scan(xh: torch.Tensor, dt: torch.Tensor, A: torch.Tensor,
 
 
 class SS2D(nn.Module):
-    """2D selective scan: 4 scan orders, batch-concat, mean fusion."""
+    """2D selective scan: 4 scan orders, batch-concat, mean fusion.
+
+    Optional WINDOWED scan.  The scan cost is linear in L but the state it
+    carries is (d_state x d_inner) per step, so a single scan over an HR128 map
+    (L=16384) is memory-bound and serial: measured ~30 s/step for 16 blocks,
+    which is why the first version of this backbone had to use a stride-2 stem
+    -- and re-introduce exactly the decimation that cost the U-Net 0.38 dB.
+
+    Windowing fixes that without giving up stride 1: cut the map into WxW
+    windows, scan each one independently and batch them all together.  Total
+    work is the same but it becomes n_windows x more parallel, so the GPU
+    finally has something to chew on.  W=32 at HR128 gives 16 windows.
+
+    Cross-window mixing uses a PADDED half-window offset on alternating blocks,
+    not a cyclic roll: a roll would put spatially distant tokens next to each
+    other inside a scan, and the scan's decay would then leak across the seam.
+    Padding keeps every window a real contiguous neighbourhood (with zero
+    border), and alternating the alignment lets information cross boundaries
+    between blocks.
+    """
 
     def __init__(self, d_model: int, d_state: int = 16, expand: float = 2,
-                 d_conv: int = 4, backend: str = "auto", chunk: int = 0):
+                 d_conv: int = 4, backend: str = "auto", chunk: int = 0,
+                 window: int = 0, shift: bool = False):
         super().__init__()
+        self.window = int(window)
+        self.shift = bool(shift)
         if backend == "auto":
             backend = "mamba_ssm" if mamba_ssm_available() else "torch"
         self.backend = backend
@@ -219,7 +241,7 @@ class SS2D(nn.Module):
             # chunk=0 -> MambaCore picks the autograd-safe segment length
             self.core = MambaCore(d_model, d_state, expand, d_conv, chunk)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _scan(self, x: torch.Tensor) -> torch.Tensor:
         b, c, h, w = x.shape
         seq = x.flatten(2).transpose(1, 2)                       # (B, L, C), (h,w) order
         seq_t = x.transpose(2, 3).flatten(2).transpose(1, 2)     # (B, L, C), (w,h) order
@@ -233,6 +255,33 @@ class SS2D(nn.Module):
         y4 = torch.flip(y4, dims=[1]).transpose(1, 2).reshape(b, c, w, h).transpose(2, 3)
         return (y1 + y2 + y3 + y4) * 0.25
 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        win = self.window
+        b, c, h, w = x.shape
+        if win <= 0 or win >= max(h, w):
+            return self._scan(x)
+        s = win // 2 if self.shift else 0
+        xp = F.pad(x, (s, s, s, s)) if s else x
+        _, _, ph, pw = xp.shape
+        # pad UP to a whole number of windows, never crop down to one: the eval
+        # runs overlapping tiles of arbitrary size (tile 64 + pad 16 gives border
+        # tiles that are not multiples of the window), and cropping silently
+        # shrank the output below the input, which failed every single pair.
+        nh, nw = -(-ph // win), -(-pw // win)
+        pad_h, pad_w = nh * win - ph, nw * win - pw
+        if pad_h or pad_w:
+            xp = F.pad(xp, (0, pad_w, 0, pad_h))
+        xw = (xp.reshape(b, c, nh, win, nw, win)
+                .permute(0, 2, 4, 1, 3, 5)
+                .reshape(b * nh * nw, c, win, win))
+        yw = self._scan(xw)
+        y = (yw.reshape(b, nh, nw, c, win, win)
+               .permute(0, 3, 1, 4, 2, 5)
+               .reshape(b, c, nh * win, nw * win))
+        if s:
+            y = y[:, :, s: s + h, s: s + w]
+        return y[:, :, :h, :w]
+
 
 # ---------------------------------------------------------------- blocks
 
@@ -241,12 +290,13 @@ class VSSBlock(nn.Module):
     """LN -> dwconv -> SiLU -> SS2D -> zero-init 1x1 -> + identity."""
 
     def __init__(self, dim: int, d_state: int = 16, expand: float = 2,
-                 backend: str = "auto"):
+                 backend: str = "auto", window: int = 0, shift: bool = False):
         super().__init__()
         self.ln = nn.LayerNorm(dim)
         self.dwconv = nn.Conv2d(dim, dim, 3, padding=1, groups=dim)
         self.act = nn.SiLU()
-        self.ss2d = SS2D(dim, d_state, expand, backend=backend)
+        self.ss2d = SS2D(dim, d_state, expand, backend=backend,
+                         window=window, shift=shift)
         self.proj = nn.Conv2d(dim, dim, 1)
         nn.init.zeros_(self.proj.weight)
         nn.init.zeros_(self.proj.bias)
@@ -262,10 +312,13 @@ class ResidualGroup(nn.Module):
     """num_res x VSSBlock, then a zero-init 3x3, plus identity."""
 
     def __init__(self, dim: int, depth: int, d_state: int, expand: float,
-                 backend: str, use_checkpoint: bool = False):
+                 backend: str, use_checkpoint: bool = False,
+                 window: int = 0, shift: bool = False):
         super().__init__()
         self.blocks = nn.ModuleList(
-            [VSSBlock(dim, d_state, expand, backend) for _ in range(depth)]
+            [VSSBlock(dim, d_state, expand, backend, window,
+                      shift and (i % 2 == 1))
+             for i in range(depth)]
         )
         self.conv = nn.Conv2d(dim, dim, 3, padding=1)
         self.use_checkpoint = use_checkpoint
@@ -303,6 +356,8 @@ class MambaSR(nn.Module):
         use_checkpoint: bool = False,
         coord_channels: int = 0,
         ssm_scale: int = 1,
+        ssm_window: int = 0,
+        ssm_shift: bool = False,
         **_unused,
     ):
         super().__init__()
@@ -315,6 +370,8 @@ class MambaSR(nn.Module):
         self.backend = backend if backend != "auto" else \
             ("mamba_ssm" if mamba_ssm_available() else "torch")
         self.ssm_scale = int(ssm_scale)
+        self.ssm_window = int(ssm_window)
+        self.ssm_shift = bool(ssm_shift)
         # ssm_scale=2 scans at LR scale (MambaIR's own design): the scan cost is
         # linear in L, and HR128 crops give L=16384 -- measured 0.49s per block
         # per direction-batch on a 4090 (vs 0.09s at L=4096), i.e. ~30 s/step for
@@ -330,7 +387,8 @@ class MambaSR(nn.Module):
             nn.init.zeros_(self.stem.weight[:, in_channels:])
 
         self.groups = nn.ModuleList(
-            [ResidualGroup(dim, num_res, d_state, expand, self.backend, use_checkpoint)
+            [ResidualGroup(dim, num_res, d_state, expand, self.backend, use_checkpoint,
+                           self.ssm_window, self.ssm_shift)
              for _ in range(num_groups)]
         )
         self.out_norm = nn.LayerNorm(dim)
