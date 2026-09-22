@@ -69,6 +69,43 @@ class TimestepEmbedding(nn.Module):
 
 
 from .gated_ffn import SpatialGatedFFN
+from .wavelet import haar_dwt2, haar_iwt2
+
+
+class DWTDown(nn.Module):
+    """Lossless orthogonal-Haar downsampling: stride-2 conv replaced by DWT+conv.
+
+    (c, H, W) --DWT--> (4c, H/2, W/2) --conv--> (c_out, H/2, W/2).
+    The stride-2 conv throws away high-frequency phase (measured: -0.38 dB vs
+    stride-1); the DWT keeps every bit (it is a bijection) and just re-lays the
+    2x2 block into 4 channel groups, so the network sees all four subbands instead
+    of an aliased average.  c_out == c keeps the existing per-level channel logic.
+    Requires even H, W (guaranteed by align = 2**(levels-1) on square crops).
+    """
+
+    def __init__(self, c: int, c_out: int):
+        super().__init__()
+        self.conv = nn.Conv2d(4 * c, c_out, 3, padding=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.conv(haar_dwt2(x))
+
+
+class IWTUp(nn.Module):
+    """Lossless upsampling: nearest x2 + conv replaced by conv + inverse Haar DWT.
+
+    (c_in, H, W) --conv--> (4*c_out, H, W) --IWT--> (c_out, 2H, 2W).  A learned
+    conv writes the four subbands and the IWT reassembles them into the HR grid,
+    so the network can place high-frequency phase exactly (pixel-shuffle can only
+    permute, nearest can only duplicate).
+    """
+
+    def __init__(self, c_in: int, c_out: int):
+        super().__init__()
+        self.conv = nn.Conv2d(c_in, 4 * c_out, 3, padding=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return haar_iwt2(self.conv(x))
 
 
 class FreqRouter(nn.Module):
@@ -223,6 +260,7 @@ class UNet(nn.Module):
         align: int = 128,
         coord_channels: int = 0,
         freq_route: bool = False,
+        wavelet: bool = False,
         **_unused,
     ):
         super().__init__()
@@ -239,6 +277,7 @@ class UNet(nn.Module):
         self.out_scale = int(out_scale)
         self.ffn = bool(ffn)
         self.ffn_ratio = float(ffn_ratio)
+        self.wavelet = bool(wavelet)
 
         # int() so fractional multipliers like 0.5 are allowed (base 64 + 0.5 = 32);
         # a float would reach GroupNorm and blow up there.
@@ -278,7 +317,11 @@ class UNet(nn.Module):
             if i in attn_levels:
                 blocks.append(AttnBlock(c))
             self.enc.append(blocks)
-            self.down.append(nn.Conv2d(c, c, 3, stride=2, padding=1) if i < L - 1 else None)
+            if i < L - 1:
+                self.down.append(DWTDown(c, c) if self.wavelet
+                                 else nn.Conv2d(c, c, 3, stride=2, padding=1))
+            else:
+                self.down.append(None)
             prev = c
 
         self.mid = nn.ModuleList(
@@ -290,8 +333,11 @@ class UNet(nn.Module):
         )
 
         # up[i]: c_{i+1} -> c_i (resolution x2).  dec[i] consumes cat(x, skip) = 2*c_i.
+        # the decoder's up path mirrors the encoder down: wavelet uses conv+IWT so
+        # it lands on chans[i] channels at 2x resolution without duplicating pixels.
         self.up = nn.ModuleList(
             [
+                IWTUp(chans[i + 1], chans[i]) if self.wavelet else
                 nn.Sequential(nn.Upsample(scale_factor=2, mode="nearest"), nn.Conv2d(chans[i + 1], chans[i], 3, padding=1))
                 for i in range(L - 1)
             ]

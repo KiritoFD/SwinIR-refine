@@ -66,6 +66,36 @@ def to_u8(t: torch.Tensor) -> np.ndarray:
     return (t.clamp(0, 1) * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
 
 
+# ---- test-time augmentation (self-ensemble over the D4 group) ----------------
+# 8 transforms = rot90 k=0..3 x optional horizontal flip.  A conv SR net is only
+# approximately D4-equivariant (weight sharing + reflective padding break it at the
+# borders), and bicubic upsampling IS equivariant, so averaging the 8 back-aligned
+# predictions is a free variance-reduction / detail-consistency boost -- and for a
+# zero-init (pure-bicubic) model it collapses exactly onto bicubic (smoke-checked).
+_D4 = [(k, f) for k in range(4) for f in (0, 1)]
+
+
+def _tta_fwd(a: np.ndarray, k: int, f: int) -> np.ndarray:
+    b = np.rot90(a, k)
+    if f:
+        b = np.flip(b, axis=1)
+    return np.ascontiguousarray(b)
+
+
+def _tta_inv(y: np.ndarray, k: int, f: int) -> np.ndarray:
+    if f:
+        y = np.flip(y, axis=1)
+    return np.ascontiguousarray(np.rot90(y, -k))
+
+
+def sr_tta(base, lr_u8: np.ndarray, scale: int) -> np.ndarray:
+    acc = None
+    for k, f in _D4:
+        inv = _tta_inv(base(_tta_fwd(lr_u8, k, f), scale), k, f)
+        acc = inv.astype(np.float32) if acc is None else acc + inv.astype(np.float32)
+    return np.clip(np.rint(acc / len(_D4)), 0, 255).astype(np.uint8)
+
+
 def _grid(n: int, core: int) -> list[int]:
     if n <= core:
         return [0]
@@ -342,6 +372,11 @@ def main():
                    help="bf16 autocast for the DiT/flow only (the VAE stays fp32). "
                         "Roughly 2x faster and 2x less memory.  Off by default so "
                         "that numbers produced before this flag stay comparable.")
+    p.add_argument("--tta", action="store_true",
+                   help="self-ensemble over the 8-element D4 group (rot90 x flip): run SR on "
+                        "each transform, back-align and average in float. ~8x eval cost, no "
+                        "retraining; usually a free PSNR + perceptual gain. Off by default so "
+                        "non-TTA numbers stay comparable.")
     args = p.parse_args()
     if not getattr(args, "data_root", ""):
         args.data_root = default_root()
@@ -398,6 +433,7 @@ def main():
             align=int(targs.get("align", 128)),
             coord_channels=2 if use_coord else 0,
             freq_route=bool(targs.get("freq_route", False)),
+            wavelet=bool(targs.get("dwt_unet", False)),
         ).to(device)
     elif backbone == "mamba":
         from .mamba_sr import build_mambasr
@@ -412,6 +448,8 @@ def main():
             backend=str(targs.get("ssm_backend", "auto")),
             coord_channels=2 if use_coord else 0,
             ssm_scale=int(targs.get("ssm_scale", 1)),
+            ssm_window=int(targs.get("ssm_window", 0)),
+            ssm_shift=bool(targs.get("ssm_shift", False)),
         ).to(device)
     else:
         model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)
@@ -439,14 +477,18 @@ def main():
 
     def make_sr_fn(steps):
         if mode == "latent":
-            return lambda lr_u8, sc: sr_latent_tiled(
+            base = lambda lr_u8, sc: sr_latent_tiled(
                 model, vae, vinfo, lr_u8, sc, steps, args.tile, args.pad, device, objective, args.seed,
                 tile_batch=oom_state["tb"], residual=residual, bf16=args.bf16,
             )
-        return lambda lr_u8, sc: sr_pixel_tiled(
-            model, lr_u8, sc, steps, args.tile, args.pad, residual, device, objective, args.seed,
-            tile_batch=oom_state["tb"], bf16=args.bf16,
-        )
+        else:
+            base = lambda lr_u8, sc: sr_pixel_tiled(
+                model, lr_u8, sc, steps, args.tile, args.pad, residual, device, objective, args.seed,
+                tile_batch=oom_state["tb"], bf16=args.bf16,
+            )
+        if args.tta:
+            return lambda lr_u8, sc: sr_tta(base, lr_u8, sc)
+        return base
 
     sweep = []
     if args.sweep_steps and objective != "reg":
@@ -474,6 +516,7 @@ def main():
         "steps": args.steps,
         "tile": args.tile,
         "pad": args.pad,
+        "tta": bool(args.tta),
         "seed": args.seed,
         "sweep": sweep,
         # whatever the IQA scorer actually loaded (names are pyiqa metric ids)

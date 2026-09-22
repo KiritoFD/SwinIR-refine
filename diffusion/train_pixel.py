@@ -42,6 +42,7 @@ from .unet import build_unet
 from .flow import flow_loss, sample_flow
 from .metrics import official_pair_metrics
 from .vae import psnr01, ssim01
+from .wavelet import dwt_highfreq_loss
 
 
 def parse_args():
@@ -77,6 +78,13 @@ def parse_args():
                         "alpha*texture_conv + (1-alpha)*narrow smooth branch, "
                         "alpha = sigmoid(conv1x1(Sobel energy of the block input)). "
                         "The FFN's fix: capacity goes where high frequencies live.")
+    p.add_argument("--dwt-unet", action="store_true",
+                   help="UNet: replace the lossy stride-2 down / nearest up between "
+                        "levels with a bijective orthogonal Haar DWT and its inverse. "
+                        "Halves resolution while keeping every high-frequency bit, so it "
+                        "aims to buy stride-1's phase fidelity at stride-2's cost and "
+                        "receptive field. Requires --native-lr 0 (a stride-1 base); step 0 "
+                        "is still exactly bicubic (zero-init output head).")
     p.add_argument("--adv-deg", action="store_true",
                    help="with --pretrain-root: replace fixed BSRGAN degradation with "
                         "the differentiable adversary (diffusion.adversarial): "
@@ -98,6 +106,15 @@ def parse_args():
     p.add_argument("--ssm-backend", default="auto", choices=["auto", "mamba_ssm", "torch"],
                    help="mamba: 'mamba_ssm' = fused CUDA kernel (if installed), "
                         "'torch' = pure-PyTorch chunked scan (exact, slower)")
+    p.add_argument("--ssm-window", type=int, default=0,
+                   help="mamba: windowed scan size. 0 = one global scan (L=H*W, very "
+                        "slow at HR). 32 makes stride-1 affordable: the map is cut "
+                        "into 32x32 windows that are scanned independently and "
+                        "batched together, which is the same work but far more "
+                        "parallel -- so the net can stay at stride 1.")
+    p.add_argument("--ssm-shift", action="store_true",
+                   help="mamba: alternate a padded half-window partition across "
+                        "blocks so information crosses window boundaries.")
     p.add_argument("--ssm-scale", type=int, default=1, choices=[1, 2],
                    help="mamba: 1 = scan at HR (stride-1; ~30 s/step for 16 blocks at "
                         "HR128 -- measured), 2 = stride-2 stem, scan at LR (L 4x shorter, "
@@ -125,6 +142,25 @@ def parse_args():
     p.add_argument("--residual", type=int, default=1,
                    help="flow: model the residual (HR - bicubic_up) instead of HR")
     p.add_argument("--reg-loss", default="l1", choices=["l1", "l2", "smoothl1"])
+    p.add_argument("--dwt-loss", action="store_true",
+                   help="add an orthogonal Haar wavelet high-frequency subband L1 "
+                        "(HL/LH/HH over --dwt-levels scales) to the reg objective. "
+                        "Fights L1 mean-shrinkage / over-smoothing with a strictly "
+                        "orthogonal, LOCAL frequency basis (unlike the failed FFT "
+                        "band-gain heads). Training-only: zero inference cost, the same "
+                        "eval_official protocol stays comparable. Backbone-agnostic (reg).")
+    p.add_argument("--dwt-weight", type=float, default=1.0,
+                   help="lambda on the wavelet high-frequency term (added to the main L1)")
+    p.add_argument("--dwt-levels", type=int, default=2,
+                   help="number of DWT decompositions (2 = level-1 + level-2 detail)")
+    p.add_argument("--equiv", action="store_true",
+                   help="D4 group-equivariance self-supervision: a second forward on a "
+                        "randomly flipped/rot90'd input, penalising |T(model(x)) - "
+                        "model(T(x))|. Makes the NET exactly equivariant rather than "
+                        "only learning it in expectation from the (already present) "
+                        "dataset augmentation. ~2x forward per step; inference unchanged.")
+    p.add_argument("--equiv-weight", type=float, default=0.25,
+                   help="alpha on the equivariance consistency term (proposal: 0.1-0.5)")
     p.add_argument("--eval-every", type=int, default=1000)
     p.add_argument("--eval-steps", type=int, default=20)
     p.add_argument("--val-pairs", type=int, default=16)
@@ -163,10 +199,22 @@ def parse_args():
                          "frame coordinates yet); pretrain first, then --init finetune with --coord")
     if args.freq_route and args.backbone != "unet":
         raise SystemExit("--freq-route requires --backbone unet")
+    if args.dwt_unet and args.backbone != "unet":
+        raise SystemExit("--dwt-unet requires --backbone unet")
+    if args.dwt_unet and int(args.native_lr) != 0:
+        raise SystemExit("--dwt-unet requires --native-lr 0 (the wavelet replaces the "
+                         "level downsampling; compounding it with a stride-2 stem is not "
+                         "the intended arm)")
     if args.backbone == "mamba" and args.objective != "reg":
         raise SystemExit("--backbone mamba is reg-only (the scan ignores t)")
     if args.adv_deg and not args.pretrain_root:
         raise SystemExit("--adv-deg requires --pretrain-root (it replaces BSRGAN there)")
+    if args.dwt_loss and args.objective != "reg":
+        raise SystemExit("--dwt-loss is a reg objective term (needs --objective reg)")
+    if args.equiv and (args.backbone != "unet" or args.objective != "reg"):
+        raise SystemExit("--equiv requires --backbone unet --objective reg")
+    if args.equiv and args.adv_deg:
+        raise SystemExit("--equiv + --adv-deg is not wired (adv replaces the LR batch)")
     return args
 
 
@@ -247,6 +295,20 @@ def lr_at(step, base, warmup, total):
         return base * (step + 1) / max(warmup, 1)
     t = (step - warmup) / max(total - warmup, 1)
     return base * 0.5 * (1 + math.cos(math.pi * min(t, 1.0)))
+
+
+def _geo(x: torch.Tensor, kind: int) -> torch.Tensor:
+    """One D4 spatial element on a (B,C,H,W) image: 1 fliplr, 2 flipud, 3-5 rot90 k=1..3.
+
+    Applied identically to the input and to the output so |T(f(x)) - f(T(x))| is a
+    real equivariance test.  Patches are square (lr_patch x lr_patch) so rot90 keeps
+    the shape; the stride-1 net's align divides H,W and rot90 preserves divisibility.
+    """
+    if kind == 1:
+        return x.flip(-1)
+    if kind == 2:
+        return x.flip(-2)
+    return torch.rot90(x, kind - 2, dims=(-2, -1))
 
 
 def main():
@@ -336,10 +398,12 @@ def main():
         kw["align"] = int(args.align)
         kw["coord_channels"] = 2 if args.coord else 0
         kw["freq_route"] = bool(args.freq_route)
+        kw["wavelet"] = bool(args.dwt_unet)
         model = build_unet(args.size, **kw).to(device)
         print(f"  unet native_lr={bool(ns)} in_stride={kw['in_stride']} "
               f"out_scale={kw['out_scale']} align={model.align} ffn={bool(args.ffn)} "
               f"coord={bool(args.coord)} freq_route={bool(args.freq_route)} "
+              f"wavelet={bool(args.dwt_unet)} "
               f"chans={model.chans}", flush=True)
     elif args.backbone == "mamba":
         if args.base:
@@ -351,11 +415,14 @@ def main():
         kw["backend"] = args.ssm_backend
         kw["coord_channels"] = 2 if args.coord else 0
         kw["ssm_scale"] = args.ssm_scale
+        kw["ssm_window"] = args.ssm_window
+        kw["ssm_shift"] = bool(args.ssm_shift)
         model = build_mambasr(args.size, **kw).to(device)
         print(f"  mamba dim={model.dim} groups={args.num_groups} blocks/RG={args.num_res} "
               f"state={args.ssm_state} expand={args.ssm_expand} backend={model.backend} "
-              f"scale={args.ssm_scale} (mamba_ssm_available={mamba_ssm_available()}) "
-              f"coord={bool(args.coord)}", flush=True)
+              f"scale={args.ssm_scale} window={args.ssm_window} shift={bool(args.ssm_shift)} "
+              f"(mamba_ssm_available={mamba_ssm_available()}) coord={bool(args.coord)} "
+              f"params={sum(q.numel() for q in model.parameters())/1e6:.2f}M", flush=True)
     else:
         if args.hidden:
             kw["hidden_size"] = args.hidden
@@ -372,6 +439,10 @@ def main():
         f"in_ch={in_ch} residual={bool(args.residual)} train={len(ds)} val={0 if val_ds is None else len(val_ds)}",
         flush=True,
     )
+    if args.dwt_loss or args.equiv:
+        print(f"  new-arms: dwt_loss={bool(args.dwt_loss)}(w={args.dwt_weight},"
+              f"levels={args.dwt_levels}) equiv={bool(args.equiv)}(w={args.equiv_weight})",
+              flush=True)
 
     model_raw = model
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -437,14 +508,19 @@ def main():
     def forward_loss(inp, lr_up, hr):
         if is_flow:
             x0 = (hr - lr_up).clamp(-1, 1) * 0.5 if args.residual else hr
-            return flow_loss(model, x0, inp, t_mode=args.t_sampler)[0]
+            return flow_loss(model, x0, inp, t_mode=args.t_sampler)[0], None
         res = model(inp, t_zeros.expand(lr_up.shape[0]))
         pred = (lr_up + res).clamp(0, 1)
         if args.reg_loss == "l2":
-            return F.mse_loss(pred, hr)
-        if args.reg_loss == "smoothl1":
-            return F.smooth_l1_loss(pred, hr)
-        return F.l1_loss(pred, hr)
+            base = F.mse_loss(pred, hr)
+        elif args.reg_loss == "smoothl1":
+            base = F.smooth_l1_loss(pred, hr)
+        else:
+            base = F.l1_loss(pred, hr)
+        if args.dwt_loss:
+            base = base + args.dwt_weight * dwt_highfreq_loss(
+                pred, hr, levels=args.dwt_levels)
+        return base, pred
 
     t0 = time.time()
     it = iter(loader)
@@ -476,7 +552,7 @@ def main():
                 lr_i = adv(hr)
                 lr_up_i = F.interpolate(lr_i, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
                 with torch.amp.autocast("cuda", enabled=args.amp, dtype=amp_dtype):
-                    loss_i = forward_loss(lr_up_i, lr_up_i, hr)
+                    loss_i = forward_loss(lr_up_i, lr_up_i, hr)[0]
                 scaler.scale(loss_i).backward()
                 scaler.unscale_(opt_phi)
                 for p in adv.parameters():
@@ -497,7 +573,16 @@ def main():
         lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
         inp = torch.cat([lr_up, coord], dim=1) if coord is not None else lr_up
         with torch.amp.autocast("cuda", enabled=args.amp, dtype=amp_dtype):
-            loss = forward_loss(inp, lr_up, hr)
+            loss, pred1 = forward_loss(inp, lr_up, hr)
+            if args.equiv:
+                # one D4 element per step; consistency |T(pred1) - pred2|.  Grads
+                # flow through both paths so the net is pushed toward exact
+                # equivariance.  A single fixed transform per step still spans the
+                # group across steps because the dataset already randomises D4.
+                kind = int(torch.randint(1, 6, (1,)).item())
+                res2 = model(_geo(inp, kind), t_zeros.expand(lr_up.shape[0]))
+                pred2 = (lr_up + res2).clamp(0, 1)
+                loss = loss + args.equiv_weight * F.l1_loss(_geo(pred1, kind), pred2)
         if not torch.isfinite(loss):
             opt.zero_grad(set_to_none=True)
             step += 1
