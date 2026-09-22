@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from diffusion.adversarial import AdvDegradation
 from diffusion.data import RealSRCropDataset
 from diffusion.eval_official import sr_pixel_tiled, to_u8
-from diffusion.unet import build_unet
+from diffusion.unet import build_unet, DWTDown
 
 
 def n_params(m) -> float:
@@ -84,6 +84,61 @@ def main():
     assert m_c.stem.weight.grad[:, 3:].abs().sum() > 0, "no grad into coord stem slice"
     print("coord: zero-init slice OK, init-equivalence OK, backward OK")
     del m_c
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
+    # ---- 2b. wavelet DWT (direction 2: wavelet multi-scale loss) ------------
+    from diffusion.wavelet import haar_dwt2, haar_iwt2, dwt_highfreq_loss
+    xw = torch.rand(2, 3, 64, 64, device=device)
+    d = (haar_iwt2(haar_dwt2(xw)) - xw).abs().max().item()
+    assert d < 1e-4, f"Haar DWT/IWT not bijective (max|IWT(DWT(x))-x| = {d})"
+    e0 = (xw ** 2).sum().item()
+    e1 = (haar_dwt2(xw) ** 2).sum().item()
+    assert abs(e0 - e1) / e0 < 1e-3, f"DWT not energy-preserving ({e0:.1f} vs {e1:.1f})"
+    y = torch.rand(2, 3, 64, 64, device=device)
+    l_same = dwt_highfreq_loss(xw, xw).item()
+    l_diff = dwt_highfreq_loss(xw, y).item()
+    assert l_same == 0.0 and l_diff > 0.0, f"dwt loss degenerate ({l_same}, {l_diff})"
+    xp = xw.clone().requires_grad_(True)
+    dwt_highfreq_loss(xp, y, levels=2).backward()
+    assert xp.grad is not None and xp.grad.abs().sum() > 0, "no grad through dwt loss"
+    print(f"wavelet: DWT<->IWT bijective (max {d:.1e}), energy-preserving, "
+          f"loss 0/self >0 cross, grads OK (l_diff={l_diff:.4f})")
+
+    # ---- 2c. D4 group elements (_geo, direction 3: equivariance reg) --------
+    from diffusion.train_pixel import _geo
+    xg = torch.arange(2 * 1 * 4 * 4, device=device, dtype=torch.float).reshape(2, 1, 4, 4)
+    assert torch.allclose(_geo(_geo(xg, 1), 1), xg), "fliplr not an involution"
+    assert torch.allclose(_geo(_geo(xg, 2), 2), xg), "flipud not an involution"
+    assert torch.allclose(_geo(_geo(_geo(_geo(xg, 3), 3), 3), 3), xg), "rot90^4 != identity"
+    for k in range(1, 6):
+        assert _geo(xg, k).shape == xg.shape, f"_geo kind={k} changed shape"
+    print("equiv _geo: fliplr/flipud involutions, rot90^4=identity, shapes preserved OK")
+
+    # ---- 2d. dwt-unet (direction 1: bijective wavelet U-Net) ----------------
+    m_wav = build_unet("S", **base_kw, wavelet=True).to(device)
+    assert isinstance(m_wav.down[0], DWTDown) and m_wav.up[0].__class__.__name__ == "IWTUp"
+    with torch.no_grad():
+        resw = m_wav(x, t0)
+    assert resw.abs().max().item() == 0.0, "dwt-unet breaks identity-at-init"
+    lw = F.l1_loss(m_wav(x, t0), torch.zeros_like(x))
+    lw.backward()
+    assert m_wav.down[0].conv.weight.grad is not None, "dwt down conv got no grad"
+    assert m_wav.up[0].conv.weight.grad is not None, "iwt up conv got no grad"
+    print(f"dwt-unet: b32 {n_params(m_wav):.2f}M, identity-at-init OK, "
+          "backward OK (DWT/IWT convs wired)")
+    # the eval-time tiled path (DWT/IWT on pad+tile sizes) is where an odd-size bug
+    # would hide and only surface after a 1.7h train -- so check it here: a zero-init
+    # wavelet model must still reproduce bicubic exactly through sr_pixel_tiled.
+    lr_u8w = (np.random.default_rng(1).random((48, 40, 3)) * 255).astype(np.uint8)
+    srw = sr_pixel_tiled(m_wav, lr_u8w, 2, steps=8, tile=24, pad=8, residual=False,
+                         device=device, objective="reg", seed=0)
+    lrt = torch.from_numpy(lr_u8w).permute(2, 0, 1).float()[None] / 255.0
+    expw = F.interpolate(lrt, size=(96, 80), mode="bicubic", align_corners=False).clamp(0, 1)
+    badw = int((srw.astype(int) - to_u8(expw[0]).astype(int)).__abs__().max())
+    assert badw <= 1, f"dwt-unet tiled eval moved pixels by {badw}"
+    print(f"dwt-unet tiled eval: zero-init reproduces bicubic through tiles (max|diff|={badw})")
+    del m_wav
     if device == "cuda":
         torch.cuda.empty_cache()
 
@@ -160,8 +215,12 @@ def main():
         seen.add((float(c[0, 0, 0]), float(c[1, 0, -1])))
     print(f"dataset coord: shape OK, range OK, {len(seen)}/8 distinct crops -> "
           "absolute position varies across crops")
-    tiny = ["--steps", "2", "--batch", "2", "--eval-every", "0", "--num-workers", "0"]
-    for extra in ([], ["--coord"], ["--freq-route"]):
+    tiny = ["--steps", "2", "--batch", "2", "--eval-every", "0", "--num-workers", "0",
+            "--cache-data", "0"]
+    for extra in ([], ["--coord"], ["--freq-route"], ["--dwt-loss"],
+                  ["--dwt-loss", "--dwt-weight", "2.0"], ["--dwt-loss", "--dwt-levels", "1"],
+                  ["--equiv"], ["--equiv", "--equiv-weight", "0.5"],
+                  ["--dwt-unet", "--native-lr", "0"]):
         argv = ["--out", "experiments/smoke_new_arms", "--backbone", "unet",
                 "--lr-patch", "64", "--base", "32", "--objective", "reg",
                 "--device", device, *tiny, *extra]
