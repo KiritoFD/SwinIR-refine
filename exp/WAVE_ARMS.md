@@ -69,14 +69,49 @@
 
 **判读**：两臂 SSIM/MUSIQ/MANIQA **三项均 ≤ 锚点**（连 dwt-unet+λ1 的 MUSIQ 55.06 < 55.22）。“无损 stride-2”既没拿到质量红利、又不涨感知 → **方向一作为质量杠杆判负**（若日后要 stride-2 的算力/感受野，它是合法的回退选项，但不是涨点手段）。
 
-## 队列（`wavedriver` master chain，自动串行、幂等）
+## TTA 自集成（方向：免费涨点，`eval_official --tta`）
 
-round-1(余 W3) → 服务器 smoke 复验 → **round-2 方向一 dwt-unet**（U1 纯架构 / U2 dwt-unet+dwt-loss λ1）
-→ **round-1b λ 扫点**（λ=2、λ=5）。
+D4 全 8 重前向→反变换→float 均值。纯评估、零重训：
+
+| ckpt | SSIM | MUSIQ | MANIQA | (Y) |
+|---|---|---|---|---|
+| b64_pre_dwt8（非-TTA） | 0.92709 | 55.87 | 0.3513 | (34.278) |
+| **b64_pre_dwt8 + TTA** | **0.92786** | 55.825 | **0.3516** | (**34.377**) |
+
+TTA 抬 SSIM/MANIQA/Y、MUSIQ 基本持平 → 交付用 TTA 版。
+
+## ×3 / ×4 迁移（zero-pretrain，plain 对照 vs dwt λ5）
+
+| scale | 臂 | SSIM | MUSIQ | MANIQA | (Y) |
+|---|---|---|---|---|---|
+| ×3 | plain | 0.8687 | **51.79** | **0.324** | (31.04) |
+| ×3 | dwt5 | 0.8686 | 50.48 | 0.320 | (31.12) |
+| ×4 | plain | 0.8295 | 47.15 | 0.299 | (29.42) |
+| ×4 | **dwt5** | **0.8322** | **48.25** | **0.313** | (29.51) |
+
+**判读**：**×4 dwt 全面有效**（MUSIQ +1.10 / MANIQA +0.014 / SSIM +0.003）；**×3 是唯一反常点**（dwt 只涨 PSNR、MUSIQ 反降 1.31）→ 非单调，**说明最优 λ 随退化强度变化（×3 处 λ=5 过锐），应做 scale-adaptive λ**。（×3/×4 绝对值低是任务本身更难，不可与 ×2 横比。）
+
+## 交付态冠军 & vs SwinIR
+
+**×2 交付冠军 = `b64_pre_dwt8 + TTA`：SSIM 0.9279 / MUSIQ 55.83 / MANIQA 0.3516 / Y 34.38。**
+
+| | SSIM | MUSIQ | MANIQA | (Y) |
+|---|---|---|---|---|
+| SwinIR-largeish 3.96M（原版） | 0.9058 | 46.79 | 0.305 | (32.97) |
+| E11 Mod-SwinIR（旧改进基线） | 0.9144 | 49.15 | 0.309 | (33.47) |
+| **b64_pre_dwt8 + TTA** | 0.9279 | 55.83 | 0.3516 | (34.38) |
+| **Δ vs SwinIR-largeish** | **+0.022** | **+9.0** | **+0.047** | (+1.40) |
+
+（协议 A：均见过 RealSR train；官方 SwinIR real-SR 是协议 B，不可直接横比。）
+
+## 下一步（分频 2.0 → 频域 rectified flow）
+
+1. **分频 2.0**：换更好小波基（db2/db4/DTCWT，替 Haar 的平移敏感/方向差）+ 各向异性分方向 λ（HL≠LH≠HH，对应像散）+ scale-adaptive λ。`wavelet.py` 扩 FIR 正交基 + `--dwt-basis/--dwt-w-hl/lh/hh`。
+2. **频域 rectified flow**：回归主干出 LL+粗 HF，仅对 **HF 子带残差** 少步流匹配（1–4 NFE）做生成式细化——只在感知能赢、PSNR/SSIM 不受损的高频带做，绕开以往 flow 全线低于地板的问题（旧结论系 PSNR 口径，新感知口径需重测）。
 
 ## 产物位置
 
-- 结果：`experiments/diffusion/wave_arms/<臂>/eval_iqa/eval.json`、`wave_unet/<臂>/...`
-- 日志：`experiments/diffusion/logs/wa_*.log`（round-1/1b）、`wu_*.log`（round-2）
-- 驱动汇总：`experiments/wave_arms.log`、`wave_unet.log`、`wave_sweep.log`、`wavedriver.log`
-- 脚本：`run_wave_arms.sh` / `run_dwt_unet_arms.sh` / `run_dwt_sweep.sh` / `chain_round2.sh`
+- 结果：`experiments/diffusion/{wave_arms,wave_unet,stack_dwt,scale_3,scale_4}/<臂>/eval_iqa[/eval_iqa_tta]/eval.json`
+- 日志：`logs/{wa_,wu_,sd_,sc_,tta_}*.log`；驱动 `experiments/{wave_arms,wave_unet,wave_sweep,stack_dwt,stack_sweep2,next_phase2}.log`
+- 脚本：`run_wave_arms / run_dwt_sweep / run_dwt_unet_arms / run_stack_dwt / run_stack_sweep(2) / run_next_phase / chain_round2 / reeval_dwtunet / reeval*`
+

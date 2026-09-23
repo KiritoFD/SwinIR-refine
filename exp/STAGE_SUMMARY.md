@@ -255,8 +255,8 @@ pyiqa 安装必须 `--no-deps`（否则拉 torch 2.14+cu13 换掉环境）；权
 | Muon A/B | 未闭合（代码就绪） |
 | **Mamba 矩阵** | **已收官（09-20，10.3h）**：等预算下 U-Net +2.3 dB，Mamba 靠 4.7× 预算仍追不上 → **架构赌注失败，关线**。详见 `MAMBA_MATRIX_RESULTS.md` |
 | **三新臂 N1/N2/N3** | N1 坐标 / N2 路由 **已跑，均 −0.02 dB 平局/微负→不采纳**；N3 对抗预训练 10600/25000 中断，**本轮暂缓**（复跑须先归档半截 `adv_pretrain/`）。详 `NEW_ARMS.md` |
-| **小波/等变/双射U-Net（本波）** | **已收官**。**评价口径：PSNR 次要，主看 SSIM/MUSIQ/MANIQA**。方向二 dwt-loss **完胜并与预训练叠加**→ **新新冠军 `b64_pre_dwt5`（BSRGAN预训练+小波高频Loss λ5）：SSIM 0.9270 / MUSIQ 55.77 / MANIQA 0.3506 / Y 34.2511→34.267**，三项全面超旧冠军。方向三等变、方向一 dwt-unet 均判负（三指标不高于锚点）。详 `WAVE_ARMS.md` |
-| ×3 / ×4 | 未跑（同配方可直接迁移） |
+| **小波/等变/双射U-Net（本波）** | **已收官**。口径：主看 SSIM/MUSIQ/MANIQA。**方向二 dwt-loss 完胜且与预训练叠加**，λ 峰值=**λ8**（λ10 回落）；**交付冠军 `b64_pre_dwt8 + TTA`：SSIM 0.9279 / MUSIQ 55.83 / MANIQA 0.3516 / Y 34.38**（**vs SwinIR-largeish：SSIM +0.022 / MUSIQ +9.0 / MANIQA +0.047 / +1.40dB**）。×4 dwt 全面有效；×3 处 λ5 过锐（需 scale-adaptive λ）。方向三等变、方向一 dwt-unet 均判负。下一步：分频 2.0 → 频域 rectified flow。详 `WAVE_ARMS.md` |
+| ×3 / ×4 | **已跑（zero-pretrain，plain vs dwt5）**：×4 dwt 全面有信（MUSIQ +1.10/MANIQA +0.014）；×3 dwt 只涨 PSNR、MUSIQ 反降→需 scale-adaptive λ。详 `WAVE_ARMS.md` |
 
 **b64_ffn 官方评估（占位，待回填）**：Y — / SSIM — / MUSIQ — / MANIQA —
 （对照 b64 无 FFN：34.1083 / 0.9246 / 55.218 / 0.3416）
