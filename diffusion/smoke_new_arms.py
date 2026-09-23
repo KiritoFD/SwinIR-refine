@@ -88,13 +88,13 @@ def main():
         torch.cuda.empty_cache()
 
     # ---- 2b. wavelet DWT (direction 2: wavelet multi-scale loss) ------------
-    from diffusion.wavelet import haar_dwt2, haar_iwt2, dwt_highfreq_loss
+    from diffusion.wavelet import haar_dwt2, haar_iwt2, dwt2_fir, dwt_highfreq_loss
     xw = torch.rand(2, 3, 64, 64, device=device)
     d = (haar_iwt2(haar_dwt2(xw)) - xw).abs().max().item()
     assert d < 1e-4, f"Haar DWT/IWT not bijective (max|IWT(DWT(x))-x| = {d})"
     e0 = (xw ** 2).sum().item()
     e1 = (haar_dwt2(xw) ** 2).sum().item()
-    assert abs(e0 - e1) / e0 < 1e-3, f"DWT not energy-preserving ({e0:.1f} vs {e1:.1f})"
+    assert abs(e0 - e1) / e0 < 1e-3, f"Haar DWT not energy-preserving ({e0:.1f} vs {e1:.1f})"
     y = torch.rand(2, 3, 64, 64, device=device)
     l_same = dwt_highfreq_loss(xw, xw).item()
     l_diff = dwt_highfreq_loss(xw, y).item()
@@ -102,8 +102,21 @@ def main():
     xp = xw.clone().requires_grad_(True)
     dwt_highfreq_loss(xp, y, levels=2).backward()
     assert xp.grad is not None and xp.grad.abs().sum() > 0, "no grad through dwt loss"
-    print(f"wavelet: DWT<->IWT bijective (max {d:.1e}), energy-preserving, "
-          f"loss 0/self >0 cross, grads OK (l_diff={l_diff:.4f})")
+    # backward-compat: explicit (1,1,1)/ll0 == the default haar call
+    assert abs(dwt_highfreq_loss(xw, y, band_w=(1.0, 1.0, 1.0)).item() - l_diff) < 1e-9, "haar default changed"
+    # FIR orthonormality (db2/db4): Parseval energy preserved, loss positive, grad flows
+    for basis in ("db2", "db4"):
+        ef = (dwt2_fir(xw, basis) ** 2).sum().item()
+        assert abs(e0 - ef) / e0 < 3e-3, f"{basis} FIR not energy-preserving ({e0:.1f} vs {ef:.1f})"
+        assert dwt_highfreq_loss(xw, y, basis=basis).item() > 0.0, f"{basis} loss zero"
+    # anisotropy separates directions: vertical stripes live in the HL (high-width) band
+    xv = torch.zeros(2, 3, 64, 64, device=device)
+    xv[:, :, :, ::3] = 1.0
+    w_hl = dwt_highfreq_loss(xv, torch.zeros_like(xv), basis="db2", band_w=(4.0, 0.2, 1.0)).item()
+    w_lh = dwt_highfreq_loss(xv, torch.zeros_like(xv), basis="db2", band_w=(0.2, 4.0, 1.0)).item()
+    assert w_hl > w_lh, f"anisotropic weights not separating directions ({w_hl:.3f} vs {w_lh:.3f})"
+    print(f"wavelet: haar bijective/energy/loss/grad OK; db2+db4 energy-preserving; "
+          f"band_w backward-compat; anisotropy separates directions ({w_hl:.3f}>{w_lh:.3f})")
 
     # ---- 2c. D4 group elements (_geo, direction 3: equivariance reg) --------
     from diffusion.train_pixel import _geo
@@ -220,7 +233,9 @@ def main():
     for extra in ([], ["--coord"], ["--freq-route"], ["--dwt-loss"],
                   ["--dwt-loss", "--dwt-weight", "2.0"], ["--dwt-loss", "--dwt-levels", "1"],
                   ["--equiv"], ["--equiv", "--equiv-weight", "0.5"],
-                  ["--dwt-unet", "--native-lr", "0"]):
+                  ["--dwt-unet", "--native-lr", "0"],
+                  ["--dwt-loss", "--dwt-basis", "db2"],
+                  ["--dwt-loss", "--dwt-basis", "db4", "--dwt-w-hl", "2", "--dwt-w-lh", "1"]):
         argv = ["--out", "experiments/smoke_new_arms", "--backbone", "unet",
                 "--lr-patch", "64", "--base", "32", "--objective", "reg",
                 "--device", device, *tiny, *extra]

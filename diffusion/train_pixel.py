@@ -153,6 +153,16 @@ def parse_args():
                    help="lambda on the wavelet high-frequency term (added to the main L1)")
     p.add_argument("--dwt-levels", type=int, default=2,
                    help="number of DWT decompositions (2 = level-1 + level-2 detail)")
+    p.add_argument("--dwt-basis", default="haar", choices=["haar", "db2", "db4"],
+                   help="orthogonal analysis wavelet. haar = shift-sensitive 2-tap; "
+                        "db2/db4 = smoother, better-localised Daubechies (still "
+                        "orthonormal, so the subband L1 stays a lossless "
+                        "redistribution of the pixel L1).")
+    p.add_argument("--dwt-w-hl", type=float, default=1.0, help="weight on the HL (vertical-edge) band")
+    p.add_argument("--dwt-w-lh", type=float, default=1.0, help="weight on the LH (horizontal-edge) band")
+    p.add_argument("--dwt-w-hh", type=float, default=1.0, help="weight on the HH (diagonal) band")
+    p.add_argument("--dwt-w-ll", type=float, default=0.0,
+                   help="optional weight re-adding the low-frequency (LL) subband term")
     p.add_argument("--equiv", action="store_true",
                    help="D4 group-equivariance self-supervision: a second forward on a "
                         "randomly flipped/rot90'd input, penalising |T(model(x)) - "
@@ -519,7 +529,8 @@ def main():
             base = F.l1_loss(pred, hr)
         if args.dwt_loss:
             base = base + args.dwt_weight * dwt_highfreq_loss(
-                pred, hr, levels=args.dwt_levels)
+                pred, hr, levels=args.dwt_levels, basis=args.dwt_basis,
+                band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh), ll_w=args.dwt_w_ll)
         return base, pred
 
     t0 = time.time()
