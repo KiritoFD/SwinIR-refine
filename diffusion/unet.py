@@ -408,3 +408,64 @@ def build_unet(size: str = "S", **kw) -> UNet:
         kw["base"] = preset.get(str(size).upper(), 64)
     kw.pop("patch_size", None)  # DiT-only argument
     return UNet(**kw)
+
+
+class HFBranch(nn.Module):
+    """Shallow residual on the 3 Haar high-frequency subbands (HL,LH,HH) = 3C channels.
+    Edges are local, so a couple of convs suffice; the last conv is zero-init so at step
+    0 the HF bands are passed through unchanged (keeps the whole net = bicubic at init)."""
+
+    def __init__(self, cin: int, hidden: int = 64, blocks: int = 2):
+        super().__init__()
+        layers = [nn.Conv2d(cin, hidden, 3, padding=1), nn.SiLU()]
+        for _ in range(blocks):
+            layers += [nn.Conv2d(hidden, hidden, 3, padding=1), nn.SiLU()]
+        layers += [nn.Conv2d(hidden, cin, 3, padding=1)]
+        self.net = nn.Sequential(*layers)
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class WaveletDualUNet(nn.Module):
+    """Direction 1, done properly (not the DWT-down/up variant, which was a wash).
+
+    One bijective Haar DWT splits the input into LL + (HL,LH,HH).  The LOW band --
+    structure/semantics -- goes through a full U-Net at half resolution (so it gets
+    stride-2's receptive field and compute for free, but LOSSLESSLY); the HIGH bands
+    -- local detail -- go through a shallow branch.  Both emit zero-init residuals,
+    recombined by the exact inverse IWT, so step 0 == bicubic exactly.  Interface
+    matches UNet: forward(x:(B,C,H,W), t) -> residual (B,C,H,W).
+    """
+
+    def __init__(self, input_size: int = 128, in_channels: int = 3, out_channels=None,
+                 base: int = 64, mult=(1, 2, 4, 4), num_res: int = 2, attn_levels=(2, 3),
+                 hf_hidden: int = 64, hf_blocks: int = 2, t_dim: int = 256,
+                 use_checkpoint: bool = False, coord_channels: int = 0, **_u):
+        super().__init__()
+        self.in_channels = int(in_channels)
+        self.out_channels = int(out_channels or in_channels)
+        self.coord_channels = 0  # absolute-coord not wired into the wavelet path
+        half = int(input_size) // 2
+        self.llnet = UNet(input_size=half, in_channels=self.in_channels,
+                          out_channels=self.out_channels, base=base, mult=mult,
+                          num_res=num_res, attn_levels=tuple(attn_levels),
+                          in_stride=1, out_scale=1, t_dim=t_dim, use_checkpoint=use_checkpoint)
+        self.hfnet = HFBranch(3 * self.in_channels, hf_hidden, hf_blocks)
+        self.align = int(self.llnet.align) * 2  # DWT /2 then the inner U-Net's align
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        bands = haar_dwt2(x)
+        C = bands.shape[1] // 4
+        ll, hf = bands[:, :C], bands[:, C:]
+        out = haar_iwt2(torch.cat([ll + self.llnet(ll, t), hf + self.hfnet(hf)], dim=1))
+        return out - x
+
+
+def build_wavelet_dual(size: str = "S", **kw) -> WaveletDualUNet:
+    kw.pop("patch_size", None)
+    if not kw.get("base"):
+        kw["base"] = {"XS": 32, "S": 64, "M": 96, "B": 128}.get(str(size).upper(), 64)
+    return WaveletDualUNet(**kw)
