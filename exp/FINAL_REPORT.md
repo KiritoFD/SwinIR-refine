@@ -56,9 +56,15 @@ RealSR V3 真实相机配对，Train 406 对（16 早停 val，实训 390），T
 4. **换骨干/堆参数/加数据/加长普遍撞墙**时，小波高频 Loss 这种"针对性正交机制"才涨点——但**生成式在 390 对规模下无胜算**（判别式回归吃满可预测部分，不可预测高频生成只会注入伪影）。
 5. computation-bound：显存不足**降 batch，不用 grad-ckpt**。
 
-## 6. 开放项（收尾中）
-- **Muon A/B**（`train_pixel --optimizer muon`，与 AdamW 在 b64+dwtλ8 上配对）：运行中，闭合优化器维度（预期中性）。
-- N3 对抗数据多样性（唯一未验的数据 lever，此前暂缓）。
+## 6. 开放项 / Muon 结论
+- **Muon 优化器：判为有效增益（本轮 09-24 结论）**。zero-pretrain b64+dwtλ8 上配对扫 lr（只换优化器），**每个 lr 点 SSIM/MUSIQ/MANIQA 全超 AdamW**（非单点侥幸）：
+  | 优化器 | SSIM | MUSIQ | MANIQA | (Y) |
+  |---|---|---|---|---|
+  | AdamW 3e-4 | 0.92590 | 55.46 | 0.3470 | (34.242) |
+  | **Muon 5e-3（甜点）** | **0.92802** | 55.97 | **0.3527** | (34.391) |
+  （1e-3/2e-3/1e-2 均介于其中，MUSIQ 55.8–56.0）。“零预训练+Muon 5e-3”已超“预训练+AdamW”的前冠军 b64_pre_dwt8(.9271/55.87/.3513) → **Muon 抵一大截预训练收益**。
+- **正在跑**：`b64_pre_dwt8_muon` = 预训练 init + Muon 5e-3 + λ8 + TTA（交付态叠加优化器），预期新冠军；脚本 `run_muon_ab/run_muon_sweep/run_champ_muon.sh`。
+- N3 对抗数据多样性（唯一未验的数据 lever，暂缓）。
 
 ## 7. 产物
 `experiments/diffusion/{wave_arms,wave_unet,stack_dwt,scale_3,scale_4,muon_ab}/<臂>/eval_iqa[/eval_iqa_tta]/eval.json`；脚本见 `scripts/server/run_*.sh`（链式/幂等）。
