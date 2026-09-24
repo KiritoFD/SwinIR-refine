@@ -178,3 +178,23 @@ def dwt_highfreq_loss(pred: torch.Tensor, target: torch.Tensor, levels: int = 2,
     if done == 0:
         return pred.new_tensor(0.0)
     return weight * loss / (done * denom)
+
+
+def dwt_hf_loss_shift(pred: torch.Tensor, target: torch.Tensor, n_shift: int = 1,
+                      **kw) -> torch.Tensor:
+    """Shift-ensemble wavelet-HF loss -- the cheap stand-in for DTCWT's shift
+    invariance.  Haar subbands are shift-SENSITIVE (a 1-px shift redistributes
+    energy across HL/LH/HH), so penalising one decomposition lets the net satisfy
+    the L1 by putting detail in the wrong subband.  Averaging the loss over the 4
+    dyadic offsets {(0,0),(1,0),(0,1),(1,1)} (circular roll) makes the target
+    shift-invariant, so the model must place detail where it is actually needed.
+    n_shift=1 -> exactly dwt_highfreq_loss (back-compatible)."""
+    offs = [(0, 0), (1, 0), (0, 1), (1, 1)][:max(1, int(n_shift))]
+    if len(offs) == 1:
+        return dwt_highfreq_loss(pred, target, **kw)
+    tot = pred.new_tensor(0.0)
+    for dy, dx in offs:
+        p = torch.roll(pred, shifts=(dy, dx), dims=(-2, -1)) if (dy or dx) else pred
+        t = torch.roll(target, shifts=(dy, dx), dims=(-2, -1)) if (dy or dx) else target
+        tot = tot + dwt_highfreq_loss(p, t, **kw)
+    return tot / len(offs)

@@ -30,6 +30,7 @@ from .data import build_index
 from .data import default_root
 from .dit import build_dit
 from .unet import build_unet
+from .unet import build_wavelet_dual
 from .flow import sample_flow
 from .hf_flow import build_hf_head, hf_refine
 from .iqa import IQAScorer
@@ -432,21 +433,30 @@ def main():
         ns = int(targs.get("native_lr", -1))
         if ns < 0:
             ns = 1 if objective == "reg" else 0
-        model = build_unet(
-            size, input_size=input_size, in_channels=in_ch,
-            base=int(targs.get("base", 0) or 0),
-            mult=_ints(targs.get("mult"), "1,2,4,4"),
-            num_res=int(targs.get("num_res", 2)),
-            attn_levels=_ints(targs.get("attn_levels"), "2,3"),
-            in_stride=2 if ns else 1,
-            out_scale=2 if ns else 1,
-            ffn=bool(targs.get("ffn", False)),
-            ffn_ratio=float(targs.get("ffn_ratio", 2.66)),
-            align=int(targs.get("align", 128)),
-            coord_channels=2 if use_coord else 0,
-            freq_route=bool(targs.get("freq_route", False)),
-            wavelet=bool(targs.get("dwt_unet", False)),
-        ).to(device)
+        if bool(targs.get("dwt_dual", False)):
+            model = build_wavelet_dual(
+                size, input_size=input_size, in_channels=3,
+                base=int(targs.get("base", 0) or 0),
+                mult=_ints(targs.get("mult"), "1,2,4,4"),
+                num_res=int(targs.get("num_res", 2)),
+                attn_levels=_ints(targs.get("attn_levels"), "2,3"),
+            ).to(device)
+        else:
+            model = build_unet(
+                size, input_size=input_size, in_channels=in_ch,
+                base=int(targs.get("base", 0) or 0),
+                mult=_ints(targs.get("mult"), "1,2,4,4"),
+                num_res=int(targs.get("num_res", 2)),
+                attn_levels=_ints(targs.get("attn_levels"), "2,3"),
+                in_stride=2 if ns else 1,
+                out_scale=2 if ns else 1,
+                ffn=bool(targs.get("ffn", False)),
+                ffn_ratio=float(targs.get("ffn_ratio", 2.66)),
+                align=int(targs.get("align", 128)),
+                coord_channels=2 if use_coord else 0,
+                freq_route=bool(targs.get("freq_route", False)),
+                wavelet=bool(targs.get("dwt_unet", False)),
+            ).to(device)
     elif backbone == "mamba":
         from .mamba_sr import build_mambasr
 

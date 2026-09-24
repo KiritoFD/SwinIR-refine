@@ -39,10 +39,12 @@ from .data import default_root
 from .dit import build_dit
 from .mamba_sr import build_mambasr, mamba_ssm_available
 from .unet import build_unet
+from .unet import build_wavelet_dual
 from .flow import flow_loss, sample_flow
 from .metrics import official_pair_metrics
 from .vae import psnr01, ssim01
 from .wavelet import dwt_highfreq_loss
+from .wavelet import dwt_hf_loss_shift
 
 
 def parse_args():
@@ -85,6 +87,11 @@ def parse_args():
                         "aims to buy stride-1's phase fidelity at stride-2's cost and "
                         "receptive field. Requires --native-lr 0 (a stride-1 base); step 0 "
                         "is still exactly bicubic (zero-init output head).")
+    p.add_argument("--dwt-dual", action="store_true",
+                   help="UNet: wavelet DUAL-BRANCH net (Direction 1 done properly) -- one "
+                        "Haar DWT, LL through a full U-Net at half res (lossless stride-2 "
+                        "receptive field) + HL/LH/HH through a shallow branch, IWT recombined. "
+                        "Requires --native-lr 0; step 0 == bicubic.")
     p.add_argument("--adv-deg", action="store_true",
                    help="with --pretrain-root: replace fixed BSRGAN degradation with "
                         "the differentiable adversary (diffusion.adversarial): "
@@ -174,6 +181,10 @@ def parse_args():
     p.add_argument("--dwt-w-hh", type=float, default=1.0, help="weight on the HH (diagonal) band")
     p.add_argument("--dwt-w-ll", type=float, default=0.0,
                    help="optional weight re-adding the low-frequency (LL) subband term")
+    p.add_argument("--dwt-shift", type=int, default=1,
+                   help="average the wavelet-HF loss over this many dyadic shift offsets "
+                        "{1,2,4}; >1 = shift-invariant (DTCWT-like), stops the net putting "
+                        "detail in the wrong subband. 1 = the plain loss.")
     p.add_argument("--dwt-level-weights", default="",
                    help="comma list, one weight per DWT scale (e.g. '1.5,0.7' = emphasise "
                         "the coarse detail band, damp the fine one). '' = uniform")
@@ -229,6 +240,11 @@ def parse_args():
         raise SystemExit("--dwt-unet requires --native-lr 0 (the wavelet replaces the "
                          "level downsampling; compounding it with a stride-2 stem is not "
                          "the intended arm)")
+    if args.dwt_dual:
+        if args.backbone != "unet" or args.objective != "reg":
+            raise SystemExit("--dwt-dual requires --backbone unet --objective reg")
+        if int(args.native_lr) != 0 or args.coord or args.freq_route or args.dwt_unet:
+            raise SystemExit("--dwt-dual needs --native-lr 0 and no --coord/--freq-route/--dwt-unet")
     if args.backbone == "mamba" and args.objective != "reg":
         raise SystemExit("--backbone mamba is reg-only (the scan ignores t)")
     if args.adv_deg and not args.pretrain_root:
@@ -423,12 +439,20 @@ def main():
         kw["coord_channels"] = 2 if args.coord else 0
         kw["freq_route"] = bool(args.freq_route)
         kw["wavelet"] = bool(args.dwt_unet)
-        model = build_unet(args.size, **kw).to(device)
-        print(f"  unet native_lr={bool(ns)} in_stride={kw['in_stride']} "
-              f"out_scale={kw['out_scale']} align={model.align} ffn={bool(args.ffn)} "
-              f"coord={bool(args.coord)} freq_route={bool(args.freq_route)} "
-              f"wavelet={bool(args.dwt_unet)} "
-              f"chans={model.chans}", flush=True)
+        if args.dwt_dual:
+            model = build_wavelet_dual(args.size, input_size=hr_px, in_channels=3,
+                                       base=kw.get("base", 0), mult=kw["mult"],
+                                       num_res=kw["num_res"], attn_levels=kw["attn_levels"],
+                                       use_checkpoint=args.grad_ckpt).to(device)
+            print(f"  unet DWT-DUAL align={model.align} chans={model.llnet.chans} "
+                  f"(LL U-Net @ half-res + shallow HF branch)", flush=True)
+        else:
+            model = build_unet(args.size, **kw).to(device)
+            print(f"  unet native_lr={bool(ns)} in_stride={kw['in_stride']} "
+                  f"out_scale={kw['out_scale']} align={model.align} ffn={bool(args.ffn)} "
+                  f"coord={bool(args.coord)} freq_route={bool(args.freq_route)} "
+                  f"wavelet={bool(args.dwt_unet)} "
+                  f"chans={model.chans}", flush=True)
     elif args.backbone == "mamba":
         if args.base:
             kw["dim"] = args.base
@@ -553,10 +577,13 @@ def main():
             base = F.l1_loss(pred, hr)
         if args.dwt_loss:
             lw = [float(x) for x in args.dwt_level_weights.split(",")] if args.dwt_level_weights else None
-            base = base + args.dwt_weight * dwt_highfreq_loss(
-                pred, hr, levels=args.dwt_levels, basis=args.dwt_basis,
-                band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh), ll_w=args.dwt_w_ll,
-                level_weights=lw)
+            common = dict(levels=args.dwt_levels, basis=args.dwt_basis,
+                          band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh),
+                          ll_w=args.dwt_w_ll, level_weights=lw)
+            if args.dwt_shift > 1:
+                base = base + args.dwt_weight * dwt_hf_loss_shift(pred, hr, n_shift=args.dwt_shift, **common)
+            else:
+                base = base + args.dwt_weight * dwt_highfreq_loss(pred, hr, **common)
         return base, pred
 
     t0 = time.time()
