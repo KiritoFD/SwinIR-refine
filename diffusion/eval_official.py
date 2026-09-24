@@ -493,7 +493,7 @@ def main():
         ha = hc.get("args", {}) or {}
         hf_head = build_hf_head("S", base=int(ha.get("head_base", 64)), ch=3,
                                 mult=tuple(int(x) for x in str(ha.get("head_mult", "1,2,4")).split(",")),
-                                num_res=int(ha.get("head_res", 2)), attn_levels=(2,)).to(device)
+                                num_res=int(ha.get("head_res", 2)), attn_levels=()).to(device)
         hf_head.load_state_dict(hc["model"])
         hf_head.eval()
         print(f"  HF flow head: {args.hf_head} (steps={args.hf_steps} scale={args.hf_scale})", flush=True)

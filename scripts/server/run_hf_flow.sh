@@ -21,6 +21,10 @@ say() { echo; echo "==================== $*  [$(date +%m-%d\ %H:%M:%S)] ========
 wait_gpu() { for _ in $(seq 1 120); do M=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits|head -1); (( M < 2000 )) && return 0; sleep 15; done; }
 
 HEAD="$HF/hf_x2"
+# v1 trained the head WITH attention -> OOM on full-image refine, and evaluated at
+# scale>=0.6 which is far too aggressive for a from-noise HF residual. Purge v1 so the
+# conv-only head retrains and the small-scale evals are fresh.
+if [ -f "$HEAD/refine_s1.0/eval_iqa/eval.json" ]; then rm -rf "$HEAD"; fi
 if [ ! -f "$HEAD/ckpt_best.pt" ] && [ ! -f "$HEAD/ckpt_last.pt" ]; then
   wait_gpu
   say "TRAIN hf head (frozen b64_pre_dwt8 -> HF residual flow)"
@@ -32,7 +36,7 @@ if [ ! -f "$HEAD/ckpt_best.pt" ] && [ ! -f "$HEAD/ckpt_last.pt" ]; then
 fi
 CK="$HEAD/ckpt_best.pt"; [ -f "$CK" ] || CK="$HEAD/ckpt_last.pt"
 
-for spec in "s1.0 4 1.0" "s0.6 4 0.6" "s2.0 4 2.0"; do
+for spec in "s0.10 2 0.10" "s0.20 2 0.20" "s0.35 2 0.35"; do
   set -- $spec; NAME="$1"; NSTEPS="$2"; SCALE="$3"
   OUT="$HEAD/refine_$NAME"
   [ -f "$OUT/eval_iqa/eval.json" ] && { say "SKIP refine_$NAME"; continue; }

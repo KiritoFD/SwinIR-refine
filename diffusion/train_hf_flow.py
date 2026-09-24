@@ -118,7 +118,7 @@ def main():
                         num_workers=a.num_workers, pin_memory=True, drop_last=True,
                         persistent_workers=a.num_workers > 0, worker_init_fn=_wi if a.num_workers > 0 else None)
     head = build_hf_head("S", base=a.head_base, ch=3, mult=tuple(int(x) for x in a.head_mult.split(",")),
-                         num_res=a.head_res, attn_levels=(2,)).to(device)
+                         num_res=a.head_res, attn_levels=()).to(device)
     print(f"hf head: {sum(p.numel() for p in head.parameters())/1e6:.2f}M  reg frozen "
           f"{a.reg_ckpt}  train={len(ds)} val={0 if val_ds is None else len(val_ds)}", flush=True)
     opt = torch.optim.AdamW(head.parameters(), lr=a.lr, weight_decay=0.0)
