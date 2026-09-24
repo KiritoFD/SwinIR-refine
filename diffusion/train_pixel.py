@@ -45,6 +45,7 @@ from .metrics import official_pair_metrics
 from .vae import psnr01, ssim01
 from .wavelet import dwt_highfreq_loss
 from .wavelet import dwt_hf_loss_shift
+from .wavelet import dtcwt_hf_loss
 
 
 def parse_args():
@@ -150,6 +151,10 @@ def parse_args():
                    help="Muon momentum (only with --optimizer muon)")
     p.add_argument("--muon-ns-steps", type=int, default=5,
                    help="Newton-Schulz orthogonalisation iterations (only with muon)")
+    p.add_argument("--muon-aux-lr", type=float, default=0.0,
+                   help="lr for the aux (bias/norm) AdamW inside the muon composite; 0 = same "
+                        "as --muon-lr. Decoupling them lets the 1-D params train at a different "
+                        "rate than the orthogonalised matrices.")
     p.add_argument("--t-sampler", default="logit_normal")
     p.add_argument("--ema", type=float, default=0.999)
     p.add_argument("--compile", action="store_true", help="torch.compile the training step")
@@ -171,11 +176,11 @@ def parse_args():
                    help="lambda on the wavelet high-frequency term (added to the main L1)")
     p.add_argument("--dwt-levels", type=int, default=2,
                    help="number of DWT decompositions (2 = level-1 + level-2 detail)")
-    p.add_argument("--dwt-basis", default="haar", choices=["haar", "db2", "db4"],
+    p.add_argument("--dwt-basis", default="haar", choices=["haar", "db2", "db4", "dtcwt"],
                    help="orthogonal analysis wavelet. haar = shift-sensitive 2-tap; "
                         "db2/db4 = smoother, better-localised Daubechies (still "
-                        "orthonormal, so the subband L1 stays a lossless "
-                        "redistribution of the pixel L1).")
+                        "orthonormal); dtcwt = dual-tree complex wavelet (2 offset trees "
+                        "-> directional magnitude, ~shift-invariant).")
     p.add_argument("--dwt-w-hl", type=float, default=1.0, help="weight on the HL (vertical-edge) band")
     p.add_argument("--dwt-w-lh", type=float, default=1.0, help="weight on the LH (horizontal-edge) band")
     p.add_argument("--dwt-w-hh", type=float, default=1.0, help="weight on the HH (diagonal) band")
@@ -498,7 +503,8 @@ def main():
     if is_muon:
         from model.optim import build_optimizer
         opt = build_optimizer(model, name="muon", lr=base_lr, weight_decay=args.weight_decay,
-                              momentum=args.muon_momentum, ns_steps=args.muon_ns_steps)
+                              momentum=args.muon_momentum, ns_steps=args.muon_ns_steps,
+                              aux_lr=(args.muon_aux_lr if args.muon_aux_lr > 0 else None))
     else:
         opt = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
     # Muon returns a CompositeOptimizer (not a torch Optimizer) and bf16 needs no loss
@@ -577,13 +583,16 @@ def main():
             base = F.l1_loss(pred, hr)
         if args.dwt_loss:
             lw = [float(x) for x in args.dwt_level_weights.split(",")] if args.dwt_level_weights else None
-            common = dict(levels=args.dwt_levels, basis=args.dwt_basis,
-                          band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh),
-                          ll_w=args.dwt_w_ll, level_weights=lw)
-            if args.dwt_shift > 1:
-                base = base + args.dwt_weight * dwt_hf_loss_shift(pred, hr, n_shift=args.dwt_shift, **common)
+            if args.dwt_basis == "dtcwt":
+                base = base + args.dwt_weight * dtcwt_hf_loss(pred, hr, levels=args.dwt_levels)
             else:
-                base = base + args.dwt_weight * dwt_highfreq_loss(pred, hr, **common)
+                common = dict(levels=args.dwt_levels, basis=args.dwt_basis,
+                              band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh),
+                              ll_w=args.dwt_w_ll, level_weights=lw)
+                if args.dwt_shift > 1:
+                    base = base + args.dwt_weight * dwt_hf_loss_shift(pred, hr, n_shift=args.dwt_shift, **common)
+                else:
+                    base = base + args.dwt_weight * dwt_highfreq_loss(pred, hr, **common)
         return base, pred
 
     t0 = time.time()
@@ -604,6 +613,14 @@ def main():
         cur_lr = lr_at(step, base_lr, args.warmup, args.steps)
         for g in opt.param_groups:
             g["lr"] = cur_lr
+        # muon composite = [Muon matrices, AdamW 1-D]; when an aux lr is set, the aux
+        # group must get its OWN cosine schedule (the uniform loop above would clobber it
+        # with the muon lr).  groups[0]=muon, groups[1:]=aux.
+        if is_muon and args.muon_aux_lr > 0:
+            aux_lr = lr_at(step, args.muon_aux_lr, args.warmup, args.steps)
+            for gi, g in enumerate(opt.param_groups):
+                if gi > 0:
+                    g["lr"] = aux_lr
 
         if adv is not None and args.adv_inner > 0:
             # true alternation: N real ascent steps for phi through the FROZEN
@@ -666,9 +683,19 @@ def main():
                 scaler.step(opt_phi)
             scaler.update()
         else:
-            # muon (no GradScaler; bf16 forward, fp32 master weights, direct step)
+            # muon path (no GradScaler; bf16 forward, fp32 master weights, direct
+            # step).  With an adversary present it must ALSO ascend on the flipped
+            # grad -- muon+adv used to crash here because scaler was None.  opt_phi is
+            # a plain Adam, so it needs no scaler.
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if adv is not None:
+                for p in adv.parameters():
+                    if p.grad is not None:
+                        p.grad.neg_()
+                torch.nn.utils.clip_grad_norm_(adv.parameters(), 1.0)
+                opt_phi.step()
+                opt_phi.zero_grad(set_to_none=True)
             opt.step()
         opt.zero_grad(set_to_none=True)
         ema_update()

@@ -118,13 +118,15 @@ class CompositeOptimizer:
 
 
 def build_optimizer(model: torch.nn.Module, *, name: str = "adamw", lr: float = 2e-4, weight_decay: float = 1e-4,
-                    momentum: float = 0.95, ns_steps: int = 5):
+                    momentum: float = 0.95, ns_steps: int = 5, aux_lr: float | None = None):
     name = name.lower()
     if name in ("adam", "adamw"):
         cls = torch.optim.Adam if name == "adam" else torch.optim.AdamW
         return cls(model.parameters(), lr=lr, betas=(0.9, 0.99), weight_decay=weight_decay)
     if name != "muon":
         raise ValueError(name)
+    if aux_lr is None:
+        aux_lr = lr
     muon_p, aux_p = [], []
     for n, p in model.named_parameters():
         if not p.requires_grad:
@@ -135,5 +137,5 @@ def build_optimizer(model: torch.nn.Module, *, name: str = "adamw", lr: float = 
             aux_p.append(p)
     opt = Muon(muon_p, lr=lr, weight_decay=weight_decay, momentum=momentum, ns_steps=ns_steps)
     if aux_p:
-        return CompositeOptimizer(opt, torch.optim.AdamW(aux_p, lr=lr, betas=(0.9, 0.99), weight_decay=0.0))
+        return CompositeOptimizer(opt, torch.optim.AdamW(aux_p, lr=aux_lr, betas=(0.9, 0.99), weight_decay=0.0))
     return opt
