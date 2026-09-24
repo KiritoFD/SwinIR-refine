@@ -31,6 +31,7 @@ from .data import default_root
 from .dit import build_dit
 from .unet import build_unet
 from .flow import sample_flow
+from .hf_flow import build_hf_head, hf_refine
 from .iqa import IQAScorer
 from .metrics import official_pair_metrics
 from .vae import decode, encode, load_vae
@@ -216,7 +217,7 @@ def sr_latent_tiled(model, vae, vinfo, lr_u8, scale, steps, tile, pad, device, o
 
 @torch.no_grad()
 def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, objective, seed,
-                   tile_batch=8, bf16=False):
+                   tile_batch=8, bf16=False, hf_head=None, hf_steps=4, hf_scale=1.0):
     h, w = lr_u8.shape[:2]
     hr_h, hr_w = h * scale, w * scale
     # a U-Net with in_stride/out_scale needs tiles aligned to 2^(levels+1);
@@ -283,6 +284,10 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
                 _accumulate(out, acc, rec[i : i + 1], H, W, pad, y0, x0)
             del cond, rgb, rec
     out = out / acc.clamp(min=1e-6)
+    if hf_head is not None:
+        # out is the full padded float prediction (1,3,H,W) with H,W multiples of
+        # align -> even, so hf_refine's Haar DWT is well defined; LL untouched.
+        out = hf_refine(hf_head, out, steps=hf_steps, device=device, seed=seed, scale=hf_scale)
     return to_u8(out[0, :, :hr_h, :hr_w])
 
 
@@ -377,6 +382,13 @@ def main():
                         "each transform, back-align and average in float. ~8x eval cost, no "
                         "retraining; usually a free PSNR + perceptual gain. Off by default so "
                         "non-TTA numbers stay comparable.")
+    p.add_argument("--hf-head", default="",
+                   help="residual HF rectified-flow head ckpt (diffusion.train_hf_flow). "
+                        "When set, the regression SR is refined in the Haar HF subbands "
+                        "before quantisation (LL untouched -> fidelity-safe, perception-targeted).")
+    p.add_argument("--hf-steps", type=int, default=4, help="HF flow sampling NFE")
+    p.add_argument("--hf-scale", type=float, default=1.0,
+                   help="how much generated HF detail to add (dial perception vs fidelity)")
     args = p.parse_args()
     if not getattr(args, "data_root", ""):
         args.data_root = default_root()
@@ -475,6 +487,17 @@ def main():
 
     oom_state = {"tb": args.tile_batch if args.tile_batch > 0 else 8}
 
+    hf_head = None
+    if args.hf_head:
+        hc = torch.load(args.hf_head, map_location="cpu", weights_only=False)
+        ha = hc.get("args", {}) or {}
+        hf_head = build_hf_head("S", base=int(ha.get("head_base", 64)), ch=3,
+                                mult=tuple(int(x) for x in str(ha.get("head_mult", "1,2,4")).split(",")),
+                                num_res=int(ha.get("head_res", 2)), attn_levels=(2,)).to(device)
+        hf_head.load_state_dict(hc["model"])
+        hf_head.eval()
+        print(f"  HF flow head: {args.hf_head} (steps={args.hf_steps} scale={args.hf_scale})", flush=True)
+
     def make_sr_fn(steps):
         if mode == "latent":
             base = lambda lr_u8, sc: sr_latent_tiled(
@@ -485,6 +508,7 @@ def main():
             base = lambda lr_u8, sc: sr_pixel_tiled(
                 model, lr_u8, sc, steps, args.tile, args.pad, residual, device, objective, args.seed,
                 tile_batch=oom_state["tb"], bf16=args.bf16,
+                hf_head=hf_head, hf_steps=args.hf_steps, hf_scale=args.hf_scale,
             )
         if args.tta:
             return lambda lr_u8, sc: sr_tta(base, lr_u8, sc)
