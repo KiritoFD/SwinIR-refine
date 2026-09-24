@@ -66,5 +66,7 @@ RealSR V3 真实相机配对，Train 406 对（16 早停 val，实训 390），T
 - **正在跑**：`b64_pre_dwt8_muon` = 预训练 init + Muon 5e-3 + λ8 + TTA（交付态叠加优化器），预期新冠军；脚本 `run_muon_ab/run_muon_sweep/run_champ_muon.sh`。
 - N3 对抗数据多样性（唯一未验的数据 lever，暂缓）。
 
+> **48h 预算重排（硬件实测）**：单个 b64 stride-1 臂已把 4090 跑满（util~100%、390/450W、33/48GB）→ 一个臂独占 ~1.7–3.3h，无法并跑，故 20 个配置扫点=实打实~48h、但边际收益低。已改投**诚实清单**（`run_honest48.sh`）：N3 对抗挖数据多样性（G_phi 攻含小波-HF 的目标）+ Muon momentum/ns_steps + 每尺度独立 λ + LL 项。新增 flag：`--muon-momentum/--muon-ns-steps/--dwt-level-weights`。
+
 ## 7. 产物
 `experiments/diffusion/{wave_arms,wave_unet,stack_dwt,scale_3,scale_4,muon_ab}/<臂>/eval_iqa[/eval_iqa_tta]/eval.json`；脚本见 `scripts/server/run_*.sh`（链式/幂等）。

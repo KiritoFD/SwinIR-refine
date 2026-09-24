@@ -139,6 +139,10 @@ def parse_args():
     p.add_argument("--muon-lr", type=float, default=2e-3,
                    help="base lr when --optimizer muon (Muon converges at a higher lr "
                         "than AdamW's 3e-4); cosine-scheduled like the AdamW arm")
+    p.add_argument("--muon-momentum", type=float, default=0.95,
+                   help="Muon momentum (only with --optimizer muon)")
+    p.add_argument("--muon-ns-steps", type=int, default=5,
+                   help="Newton-Schulz orthogonalisation iterations (only with muon)")
     p.add_argument("--t-sampler", default="logit_normal")
     p.add_argument("--ema", type=float, default=0.999)
     p.add_argument("--compile", action="store_true", help="torch.compile the training step")
@@ -170,6 +174,9 @@ def parse_args():
     p.add_argument("--dwt-w-hh", type=float, default=1.0, help="weight on the HH (diagonal) band")
     p.add_argument("--dwt-w-ll", type=float, default=0.0,
                    help="optional weight re-adding the low-frequency (LL) subband term")
+    p.add_argument("--dwt-level-weights", default="",
+                   help="comma list, one weight per DWT scale (e.g. '1.5,0.7' = emphasise "
+                        "the coarse detail band, damp the fine one). '' = uniform")
     p.add_argument("--equiv", action="store_true",
                    help="D4 group-equivariance self-supervision: a second forward on a "
                         "randomly flipped/rot90'd input, penalising |T(model(x)) - "
@@ -466,7 +473,8 @@ def main():
     base_lr = args.muon_lr if is_muon else args.lr
     if is_muon:
         from model.optim import build_optimizer
-        opt = build_optimizer(model, name="muon", lr=base_lr, weight_decay=args.weight_decay)
+        opt = build_optimizer(model, name="muon", lr=base_lr, weight_decay=args.weight_decay,
+                              momentum=args.muon_momentum, ns_steps=args.muon_ns_steps)
     else:
         opt = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
     # Muon returns a CompositeOptimizer (not a torch Optimizer) and bf16 needs no loss
@@ -544,9 +552,11 @@ def main():
         else:
             base = F.l1_loss(pred, hr)
         if args.dwt_loss:
+            lw = [float(x) for x in args.dwt_level_weights.split(",")] if args.dwt_level_weights else None
             base = base + args.dwt_weight * dwt_highfreq_loss(
                 pred, hr, levels=args.dwt_levels, basis=args.dwt_basis,
-                band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh), ll_w=args.dwt_w_ll)
+                band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh), ll_w=args.dwt_w_ll,
+                level_weights=lw)
         return base, pred
 
     t0 = time.time()

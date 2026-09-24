@@ -138,36 +138,41 @@ def dwt2_fir(x: torch.Tensor, basis: str = "db2") -> torch.Tensor:
 
 def dwt_highfreq_loss(pred: torch.Tensor, target: torch.Tensor, levels: int = 2,
                       weight: float = 1.0, basis: str = "haar",
-                      band_w=(1.0, 1.0, 1.0), ll_w: float = 0.0) -> torch.Tensor:
+                      band_w=(1.0, 1.0, 1.0), ll_w: float = 0.0,
+                      level_weights=None) -> torch.Tensor:
     """L1 on the wavelet high-frequency subbands (HL/LH/HH) over `levels` scales.
 
     basis='haar' uses the exact slicing transform (and reproduces the previous loss
     bit-for-bit when band_w=(1,1,1), ll_w=0); 'db2'/'db4' use the orthonormal FIR path.
     `band_w=(w_hl,w_lh,w_hh)` lets the three detail directions be weighted differently
     -- horizontal (LH) vs vertical (HL) edge energy is exactly the lens-astigmatism
-    signal; `ll_w>0` re-adds a (small) low-frequency term.  The per-level result is
-    normalised by the weight sum so a heavier anisotropy does not silently scale the
-    gradient magnitude.
+    signal; `ll_w>0` re-adds a (small) low-frequency term.  `level_weights` (len=levels)
+    gives each SCALE its own weight (coarse detail vs fine detail want different emphasis);
+    None = uniform.  The per-level result is normalised by the weight sum so a heavier
+    anisotropy does not silently scale the gradient magnitude.
     """
     fwd = haar_dwt2 if basis == "haar" else (lambda z: dwt2_fir(z, basis))
+    if level_weights is None:
+        level_weights = [1.0] * levels
     w = torch.tensor(list(band_w) + ([ll_w] if ll_w > 0 else []),
                      device=pred.device, dtype=torch.float32)
     denom = float(w.sum().clamp(min=1e-6)) if w.numel() else 1.0
     loss = pred.new_tensor(0.0)
     p, t = pred, target
     done = 0
-    for _ in range(levels):
+    for lvl in range(levels):
         h = p.shape[-1]
         v = p.shape[-2]
         if h % 2 or v % 2 or h < 8 or v < 8:
             break
+        lw = float(level_weights[lvl]) if lvl < len(level_weights) else float(level_weights[-1])
         dp, dt = fwd(p), fwd(t)
         C = dp.shape[1] // 4
         bands = [(C, 2 * C, band_w[0]), (2 * C, 3 * C, band_w[1]), (3 * C, 4 * C, band_w[2])]
         for a, b, wv in bands:
-            loss = loss + float(wv) * F.l1_loss(dp[:, a:b], dt[:, a:b])
+            loss = loss + lw * float(wv) * F.l1_loss(dp[:, a:b], dt[:, a:b])
         if ll_w > 0:
-            loss = loss + float(ll_w) * F.l1_loss(dp[:, :C], dt[:, :C])
+            loss = loss + lw * float(ll_w) * F.l1_loss(dp[:, :C], dt[:, :C])
         p, t = dp[:, :C], dt[:, :C]
         done += 1
     if done == 0:
