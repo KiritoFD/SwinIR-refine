@@ -1,5 +1,9 @@
 # RealSR V3 ×2 — 阶段性总结（2026-09-10 → 09-19）
 
+> **⚠️ 2026-09-24 更新**：本文件是 09-10→09-20 的快照（PSNR 口径冠军 Y 34.1988）。
+> 之后的**小波高频 Loss + TTA + scale-adaptive λ** 已刷新最优，且评价口径改为**主看 SSIM/MUSIQ/MANIQA**。
+> **最终全貌见 `FINAL_REPORT.md`**（交付冠军 b64_pre_dwt8+TTA：SSIM .9279 / MUSIQ 55.83 / MANIQA .3516）。
+
 > 本文是全项目的**一份式**总结：任务与协议、每一条尝试及其判定（有效 / 无效 / 待定）、
 > 硬件与基建结论、方法论教训、当前状态与下一步。数字全部为 RealSR V3 官方 Test.m
 > **全量 100 对**（Canon 50 + Nikon 50），limited-range Y（BT.601 16–235）、uint8、
@@ -295,7 +299,8 @@ pyiqa 安装必须 `--no-deps`（否则拉 torch 2.14+cu13 换掉环境）；权
 | `VAE_NOISE_FLOOR_REALSR.md` | 4 个 VAE 的重建底噪（选型依据） |
 | `PIXEL_DIFFUSION_MEMORY.md` | pixel diffusion 显存估算（HR256 不可行的依据） |
 | `MAMBA_ARM.md` / `MAMBA_MATRIX_RESULTS.md` | Mamba/VSS 臂设计·踩坑 / **矩阵完整结果与判定（关线）** |
-| `WAVE_ARMS.md` | 方向一/二/三（小波 Loss / 等变正则 / 双射小波 U-Net）工程与阶段结果 |
+| `WAVE_ARMS.md` | 方向一/二/三（小波 Loss / 等变正则 / 双射小波 U-Net）+ TTA + ×3/×4 + 频域rectified flow 工程与阶段结果 |
+| `FINAL_REPORT.md` | **最终整合全貌（09-24）**：任务/协议/冠军配方/有效项/已判负路线/方法论；口径主看感知三指标 |
 | `PLAN_12H.md` / `NEW_ARMS.md` / `DIT_LINE.md` | 串行计划 / 新臂 / DiT 线由来 |
 | `SWINIR_DATA_PROTOCOL.md` / `BASELINE_PROTOCOL.md` / `SR_SCALING_*.md` | 数据/协议边界与 sr-scaling 移植 |
 | `TRAIN_HARDENING.md` | 8GB 稳定训练加固（Muon/grad-accum/dataset） |

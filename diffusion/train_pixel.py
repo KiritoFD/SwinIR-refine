@@ -132,6 +132,13 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--warmup", type=int, default=500)
     p.add_argument("--weight-decay", type=float, default=0.0)
+    p.add_argument("--optimizer", default="adamw", choices=["adamw", "muon"],
+                   help="muon = Newton-Schulz orthogonalised momentum on >=2D weights "
+                        "+ AdamW for the rest (reuses model/optim.Muon). A/B vs the "
+                        "AdamW anchor; Muon wants its own lr (--muon-lr).")
+    p.add_argument("--muon-lr", type=float, default=2e-3,
+                   help="base lr when --optimizer muon (Muon converges at a higher lr "
+                        "than AdamW's 3e-4); cosine-scheduled like the AdamW arm")
     p.add_argument("--t-sampler", default="logit_normal")
     p.add_argument("--ema", type=float, default=0.999)
     p.add_argument("--compile", action="store_true", help="torch.compile the training step")
@@ -455,8 +462,17 @@ def main():
               flush=True)
 
     model_raw = model
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scaler = torch.amp.GradScaler("cuda", enabled=args.amp)
+    is_muon = args.optimizer == "muon"
+    base_lr = args.muon_lr if is_muon else args.lr
+    if is_muon:
+        from model.optim import build_optimizer
+        opt = build_optimizer(model, name="muon", lr=base_lr, weight_decay=args.weight_decay)
+    else:
+        opt = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
+    # Muon returns a CompositeOptimizer (not a torch Optimizer) and bf16 needs no loss
+    # scaling -> skip the GradScaler for muon; autocast still runs the forward in bf16.
+    scaler = None if is_muon else torch.amp.GradScaler("cuda", enabled=args.amp)
+    print(f"  optimizer={args.optimizer} lr0={base_lr:.2e} amp={bool(args.amp)} scaler={'off' if scaler is None else 'on'}", flush=True)
 
     adv = None
     opt_phi = None
@@ -548,7 +564,7 @@ def main():
             lr = batch["lr"].to(device, non_blocking=True)
             hr = batch["hr"].to(device, non_blocking=True)
         coord = batch["coord"].to(device, non_blocking=True) if args.coord else None
-        cur_lr = lr_at(step, args.lr, args.warmup, args.steps)
+        cur_lr = lr_at(step, base_lr, args.warmup, args.steps)
         for g in opt.param_groups:
             g["lr"] = cur_lr
 
@@ -598,19 +614,25 @@ def main():
             opt.zero_grad(set_to_none=True)
             step += 1
             continue
-        scaler.scale(loss).backward()
-        scaler.unscale_(opt)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        if adv is not None:
-            scaler.unscale_(opt_phi)
-            for p in adv.parameters():
-                if p.grad is not None:
-                    p.grad.neg_()
-            torch.nn.utils.clip_grad_norm_(adv.parameters(), 1.0)
-        scaler.step(opt)
-        if adv is not None:
-            scaler.step(opt_phi)
-        scaler.update()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.unscale_(opt)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if adv is not None:
+                scaler.unscale_(opt_phi)
+                for p in adv.parameters():
+                    if p.grad is not None:
+                        p.grad.neg_()
+                torch.nn.utils.clip_grad_norm_(adv.parameters(), 1.0)
+            scaler.step(opt)
+            if adv is not None:
+                scaler.step(opt_phi)
+            scaler.update()
+        else:
+            # muon (no GradScaler; bf16 forward, fp32 master weights, direct step)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
         opt.zero_grad(set_to_none=True)
         ema_update()
 
