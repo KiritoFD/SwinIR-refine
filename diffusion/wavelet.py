@@ -198,3 +198,40 @@ def dwt_hf_loss_shift(pred: torch.Tensor, target: torch.Tensor, n_shift: int = 1
         t = torch.roll(target, shifts=(dy, dx), dims=(-2, -1)) if (dy or dx) else target
         tot = tot + dwt_highfreq_loss(p, t, **kw)
     return tot / len(offs)
+
+
+def dtcwt_hf_loss(pred: torch.Tensor, target: torch.Tensor, levels: int = 2,
+                  weight: float = 1.0, tree_basis: str = "db2") -> torch.Tensor:
+    """Dual-tree complex wavelet (DTCWT-style) high-frequency loss.
+
+    Two analysis trees -- one at offset (0,0), one at a half-sample offset (1,1) --
+    are combined per directional band into a complex coefficient (real=tree A, imag=
+    tree B) and the loss is L1 on the MAGNITUDE.  This gives the two properties Haar
+    lacks and the plain shift-ensemble only partly recovers: approximate SHIFT
+    INVARIANCE (a shift rotates the complex coefficient, barely moving |.|) and
+    sharper DIRECTIONAL selectivity.  tree_basis is the (orthonormal) FIR used in
+    each tree; db2 by default.  Runs in fp32.
+    """
+    fwd = (lambda z: haar_dwt2(z)) if tree_basis == "haar" else (lambda z: dwt2_fir(z, tree_basis))
+    loss = pred.new_tensor(0.0)
+    p, t = pred.float(), target.float()
+    done = 0
+    for _ in range(levels):
+        h, w = p.shape[-1], p.shape[-2]
+        if h % 2 or w % 2 or h < 8 or w < 8:
+            break
+        ap, at = fwd(p), fwd(t)
+        bp = torch.roll(fwd(torch.roll(p, shifts=(1, 1), dims=(-2, -1))),
+                        shifts=(-1, -1), dims=(-2, -1))
+        bt = torch.roll(fwd(torch.roll(t, shifts=(1, 1), dims=(-2, -1))),
+                        shifts=(-1, -1), dims=(-2, -1))
+        C = ap.shape[1] // 4
+        hp, ht, bq, btq = ap[:, C:], at[:, C:], bp[:, C:], bt[:, C:]
+        magp = torch.sqrt(hp * hp + bq * bq + 1e-8)
+        magt = torch.sqrt(ht * ht + btq * btq + 1e-8)
+        loss = loss + F.l1_loss(magp, magt)
+        p, t = ap[:, :C], at[:, :C]
+        done += 1
+    if done == 0:
+        return pred.new_tensor(0.0)
+    return weight * loss / done
