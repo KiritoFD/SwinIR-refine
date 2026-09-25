@@ -76,6 +76,19 @@ for f in sorted(glob.glob(os.path.join(tune,"*","eval_iqa","eval.json"))):
     except Exception: a={}
     rows.append((sc,d,a))
     if best is None or sc>best[0]: best=(sc,d,a)
+# include the un-swept BASE reference (champmuon = muon lr5e-3/mom.95/ns5) as a
+# candidate too -- without this the selector only compared the 9 deviations and
+# could pick a handicapped lr2e-3 over the actually-best 5e-3.
+cp = os.path.join(tune, "..", "stack_dwt", "b64_pre_dwt8_muon", "eval_iqa", "eval.json")
+if os.path.exists(cp):
+    try:
+        j = json.load(open(cp))
+        sc = (j["ssim_y"]-0.925)*1000+(j.get("musiq",55.0)-55.0)+(j.get("maniqa",0.345)-0.345)*1000
+        a = {"muon_lr":0.005,"muon_momentum":0.95,"muon_ns_steps":5,"muon_aux_lr":0.0,"weight_decay":0.0}
+        rows.append((sc,"base_5e3",a))
+        if best is None or sc>best[0]: best=(sc,"base_5e3",a)
+    except Exception:
+        pass
 # include the base reference (champmuon) as a candidate too
 sys.stderr.write("rank:\n"+"\n".join(f"{s:.3f} {d}" for s,d,_ in sorted(rows,reverse=True))+"\n")
 if best:
