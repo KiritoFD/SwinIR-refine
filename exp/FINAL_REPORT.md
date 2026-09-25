@@ -63,8 +63,12 @@ RealSR V3 真实相机配对，Train 406 对（16 早停 val，实训 390），T
   | AdamW 3e-4 | 0.92590 | 55.46 | 0.3470 | (34.242) |
   | **Muon 5e-3（甜点）** | **0.92802** | 55.97 | **0.3527** | (34.391) |
   （1e-3/2e-3/1e-2 均介于其中，MUSIQ 55.8–56.0）。“零预训练+Muon 5e-3”已超“预训练+AdamW”的前冠军 b64_pre_dwt8(.9271/55.87/.3513) → **Muon 抵一大截预训练收益**。
-- **正在跑**：`b64_pre_dwt8_muon` = 预训练 init + Muon 5e-3 + λ8 + TTA（交付态叠加优化器），预期新冠军；脚本 `run_muon_ab/run_muon_sweep/run_champ_muon.sh`。
-- N3 对抗数据多样性（唯一未验的数据 lever，暂缓）。
+- **正在跑**：`b64_pre_dwt8_muon` = 预训练 init + Muon 5e-3 + λ8 + TTA（交付态叠加优化器），已完成：**SSIM .92797 / MUSIQ 55.85 / MANIQA .3521 / Y 34.289（+TTA .92890/55.75/.3521/34.405）**。
+- **Muon 参数扫点（Phase M）**：在交付基座上扫 lr/momentum/ns_steps/aux-lr/wd，**9 个偏离全部不敌 base lr=5e-3** → **Muon 最优=lr5e-3/mom0.95/ns5**（选择器曾漏选 base、已修）。
+- **mech@5e-3（诚实清单机制项）**：**移位小波 loss p_shift4 = 新非-TTA最优**（**MUSIQ 56.02 / MANIQA .3534 全项目最高**、SSIM持平、Y34.31）；各向异性≈持平；**DTCWT 更差**（死）；**双路小波U-Net 明显负**（死）。**新交付候选 = 预训练+Muon5e-3+λ8+shift4**（+TTA 链式评估中）。N3 对抗(Muon) pretrain→ft 待收。
+
+> 诚实清单总结：四条非回归路线（Mamba/等变/双射小波U-Net/频域rectified-flow）+ 双路小波U-Net + DTCWT 均判负；**只有“小波高频 Loss”及其“移位集成”持续涨点**（已与预训练/Muon/TTA 叠加）。
+- N3 对抗数据多样性（唯一未验的数据 lever，现已在 mech_best 里用 Muon 跑，待收）。
 
 > **48h 预算重排（硬件实测）**：单个 b64 stride-1 臂已把 4090 跑满（util~100%、390/450W、33/48GB）→ 一个臂独占 ~1.7–3.3h，无法并跑，故 20 个配置扫点=实打实~48h、但边际收益低。已改投**诚实清单**（`run_honest48.sh`）：N3 对抗挖数据多样性（G_phi 攻含小波-HF 的目标）+ Muon momentum/ns_steps + 每尺度独立 λ + LL 项。新增 flag：`--muon-momentum/--muon-ns-steps/--dwt-level-weights`。
 
