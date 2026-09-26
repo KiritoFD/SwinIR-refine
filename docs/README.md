@@ -10,7 +10,8 @@ paper-style report); everything below it is deeper detail.
 | 2 | [`../docs/baseline/README.md`](baseline/README.md) | **Baseline catalogue (2021–2026)** — every representative method, its numbers (source + protocol tag), and which we reproduced on the server. |
 | 3 | [`../exp/RELATED_WORK_AND_UPPER_BOUND.md`](../exp/RELATED_WORK_AND_UPPER_BOUND.md) | **Related work + the empirical PSNR/SSIM ceiling** — verified citations + our training-free three-wall measurement. |
 | 4 | [`../exp/FINAL_REPORT.md`](../exp/FINAL_REPORT.md) | **Full experiment chronicle** (2026-09-10 → 09-26): every run's hypothesis/config/result/verdict, appendices A–F (106-run master table, root inventory, per-run config ledger, audit findings, upper-bound probe). |
-| 5 | [`slides.md`](slides.md) | **Slide deck** (Marp/reveal-ready Markdown) summarising 1–4. |
+| 5 | [`slides_final.pptx`](slides_final.pptx) | **中文学术报告幻灯片（22 页）**：引言→相关工作→方法(含数学)→实验(含全方法全指标密集大表)。生成器 [`make_slides.py`](make_slides.py) + 配图 [`make_figs.py`](make_figs.py)。 |
+| 6 | [`slides.md`](slides.md) | 英文版 Marp 大纲（可 `marp` 导出）；内容与 5 对应。 |
 
 ## Tooling & reproduction
 | file | purpose |

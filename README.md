@@ -11,7 +11,7 @@ shift-ensemble variant) + the **Muon** optimizer + test-time augmentation.
 
 Docs map: **[`docs/README.md`](docs/README.md)** · baseline catalogue **[`docs/baseline/README.md`](docs/baseline/README.md)** ·
 related work & upper bound **[`exp/RELATED_WORK_AND_UPPER_BOUND.md`](exp/RELATED_WORK_AND_UPPER_BOUND.md)** ·
-full chronicle **[`exp/FINAL_REPORT.md`](exp/FINAL_REPORT.md)** · slides **[`docs/slides.md`](docs/slides.md)**.
+full chronicle **[`exp/FINAL_REPORT.md`](exp/FINAL_REPORT.md)** · 中文学术报告幻灯 **`docs/slides_final.pptx`** (22 页)。
 
 ---
 
