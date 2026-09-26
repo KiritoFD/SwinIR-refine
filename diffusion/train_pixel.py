@@ -167,6 +167,18 @@ def parse_args():
     p.add_argument("--nr-weight", type=float, default=0.0,
                    help="coefficient on the --nr-loss term (MUSIQ ~50 scale -> use ~0.01-0.05; "
                         "MANIQA ~0.3 scale -> use ~0.5-3).")
+    p.add_argument("--ot-loss", default="", choices=["", "swd", "sinkhorn"],
+                   help="Optimal-Transport distance (innovation #1): matches local-patch "
+                        "DISTRIBUTIONS instead of pixels, sidestepping the irreducible "
+                        "sub-pixel registration penalty; swd=sliced Wasserstein, sinkhorn="
+                        "entropic OT. Add as a term or replace L1 with --ot-replace-l1.")
+    p.add_argument("--ot-weight", type=float, default=1.0, help="OT term coefficient")
+    p.add_argument("--ot-on", default="image", choices=["image", "wavelet"],
+                   help="apply OT on raw patches or on Haar high-frequency subbands")
+    p.add_argument("--ot-patch", type=int, default=8, help="OT patch size")
+    p.add_argument("--ot-nproj", type=int, default=256, help="SWD random projections")
+    p.add_argument("--ot-replace-l1", action="store_true",
+                   help="use OT as the MAIN fidelity term instead of L1 (wavelet/EMA kept)")
     p.add_argument("--overfit-test", action="store_true",
                    help="ORACLE ceiling probe: TRAIN ON THE Test split (all 100 pairs, "
                         "random crops) with pure L1 and no early stop.  Measures the "
@@ -652,6 +664,20 @@ def main():
                 print(f"  NR-IQA loss: maximize {args.nr_loss} x{args.nr_weight}", flush=True)
             # metric higher-is-better => subtract to maximize it during descent
             base = base - args.nr_weight * _nr["m"](pred.float())
+        if args.ot_loss:
+            from .ot_loss import ot_loss
+            ot = ot_loss(pred, hr, kind=args.ot_loss, on=args.ot_on,
+                         patch=args.ot_patch, n_proj=args.ot_nproj)
+            if args.ot_replace_l1:
+                base = args.ot_weight * ot
+                if args.dwt_loss:
+                    lw = [float(x) for x in args.dwt_level_weights.split(",")] if args.dwt_level_weights else None
+                    base = base + args.dwt_weight * dwt_highfreq_loss(
+                        pred, hr, levels=args.dwt_levels, basis=args.dwt_basis,
+                        band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh),
+                        ll_w=args.dwt_w_ll, level_weights=lw)
+            else:
+                base = base + args.ot_weight * ot
         return base, pred
 
     t0 = time.time()
