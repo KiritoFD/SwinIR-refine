@@ -179,6 +179,11 @@ def parse_args():
     p.add_argument("--ot-nproj", type=int, default=256, help="SWD random projections")
     p.add_argument("--ot-replace-l1", action="store_true",
                    help="use OT as the MAIN fidelity term instead of L1 (wavelet/EMA kept)")
+    p.add_argument("--lora-r", type=int, default=0,
+                   help="innovation #4: wrap the SR net with a low-rank residual adapter "
+                        "(zero-init) and train only it (pair with --freeze-base + --init <ckpt>).")
+    p.add_argument("--freeze-base", action="store_true",
+                   help="with --lora-r: freeze the pretrained base, optimise only the adapter")
     p.add_argument("--overfit-test", action="store_true",
                    help="ORACLE ceiling probe: TRAIN ON THE Test split (all 100 pairs, "
                         "random crops) with pure L1 and no early stop.  Measures the "
@@ -553,6 +558,15 @@ def main():
               f"levels={args.dwt_levels}) equiv={bool(args.equiv)}(w={args.equiv_weight})",
               flush=True)
 
+    if args.lora_r > 0:
+        from .unet import LoraUNet
+        model = LoraUNet(model, r=args.lora_r, in_ch=3 + (2 if args.coord else 0)).to(device)
+        if args.freeze_base:
+            for p in model.base.parameters():
+                p.requires_grad_(False)
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"  LoRA adapter r={args.lora_r} freeze_base={bool(args.freeze_base)} "
+              f"trainable={trainable/1e3:.1f}K", flush=True)
     model_raw = model
     is_muon = args.optimizer == "muon"
     base_lr = args.muon_lr if is_muon else args.lr
@@ -616,7 +630,10 @@ def main():
     if args.init and Path(args.init).is_file():
         # weights only: fine-tune a pretrained ckpt from step 0 with a fresh schedule
         ck = torch.load(args.init, map_location="cpu", weights_only=False)
-        model_raw.load_state_dict(ck["model"])
+        sd = ck["model"]
+        if args.lora_r > 0:
+            sd = {"base." + k: v for k, v in sd.items()}   # init belongs to the wrapped base
+        model_raw.load_state_dict(sd, strict=(args.lora_r == 0))
         if ema is not None and ck.get("ema") is not None:
             ema.load_state_dict(ck["ema"])
         step, best, no_gain = 0, -1.0, 0

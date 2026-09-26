@@ -70,6 +70,22 @@ def to_u8(t: torch.Tensor) -> np.ndarray:
     return (t.clamp(0, 1) * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
 
 
+def data_consistency_project(hr: torch.Tensor, lr: torch.Tensor, iters: int, eta: float) -> torch.Tensor:
+    """Innovation #2 (range/null idea, training-free): project the SR onto the
+    LR-consistent set by back-projection  hr <- hr - eta * A^T(A hr - lr)  with A a
+    bicubic downsample. Keeps the regression range-space fidelity and nudges the null-
+    space residual toward what the LR actually supports (a cheap stand-in for the
+    diffusion data-consistency step)."""
+    if iters <= 0:
+        return hr
+    out = hr
+    for _ in range(iters):
+        est_lr = F.interpolate(out, size=lr.shape[-2:], mode="bicubic", align_corners=False)
+        resid = est_lr - lr
+        out = (out - eta * F.interpolate(resid, size=hr.shape[-2:], mode="bicubic", align_corners=False)).clamp(0, 1)
+    return out
+
+
 # ---- test-time augmentation (self-ensemble over the D4 group) ----------------
 # 8 transforms = rot90 k=0..3 x optional horizontal flip.  A conv SR net is only
 # approximately D4-equivariant (weight sharing + reflective padding break it at the
@@ -220,7 +236,7 @@ def sr_latent_tiled(model, vae, vinfo, lr_u8, scale, steps, tile, pad, device, o
 
 @torch.no_grad()
 def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, objective, seed,
-                   tile_batch=8, bf16=False, hf_head=None, hf_steps=4, hf_scale=1.0):
+                   tile_batch=8, bf16=False, hf_head=None, hf_steps=4, hf_scale=1.0, dcp=0, dcp_eta=0.2):
     h, w = lr_u8.shape[:2]
     hr_h, hr_w = h * scale, w * scale
     # a U-Net with in_stride/out_scale needs tiles aligned to 2^(levels+1);
@@ -291,7 +307,10 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
         # out is the full padded float prediction (1,3,H,W) with H,W multiples of
         # align -> even, so hf_refine's Haar DWT is well defined; LL untouched.
         out = hf_refine(hf_head, out, steps=hf_steps, device=device, seed=seed, scale=hf_scale)
-    return to_u8(out[0, :, :hr_h, :hr_w])
+    final = out[0, :, :hr_h, :hr_w]
+    if dcp:
+        final = data_consistency_project(final.unsqueeze(0), lr_t, dcp, dcp_eta).squeeze(0)
+    return to_u8(final)
 
 
 def run_pairs(pairs, sr_fn, shave=0, oom_state=None, iqa=None):
@@ -392,6 +411,11 @@ def main():
     p.add_argument("--hf-steps", type=int, default=4, help="HF flow sampling NFE")
     p.add_argument("--hf-scale", type=float, default=1.0,
                    help="how much generated HF detail to add (dial perception vs fidelity)")
+    p.add_argument("--dcp", type=int, default=0,
+                   help="innovation #2 (training-free): data-consistency back-projection "
+                        "iterations applied to the SR before quantisation (hr <- hr - "
+                        "eta*A^T(A hr - lr)); projects toward the LR-consistent set.")
+    p.add_argument("--dcp-eta", type=float, default=0.2, help="DCP step size")
     args = p.parse_args()
     if not getattr(args, "data_root", ""):
         args.data_root = default_root()
@@ -483,6 +507,9 @@ def main():
         ).to(device)
     else:
         model = build_dit(size, input_size=input_size, patch_size=patch, in_channels=in_ch).to(device)
+    if int(targs.get("lora_r", 0) or 0) > 0:
+        from .unet import LoraUNet
+        model = LoraUNet(model, r=int(targs["lora_r"]), in_ch=in_ch).to(device)
     model.load_state_dict(ck["model"])
     model.eval()
     if args.tile <= 0:
@@ -527,6 +554,7 @@ def main():
                 model, lr_u8, sc, steps, args.tile, args.pad, residual, device, objective, args.seed,
                 tile_batch=oom_state["tb"], bf16=args.bf16,
                 hf_head=hf_head, hf_steps=args.hf_steps, hf_scale=args.hf_scale,
+                dcp=args.dcp, dcp_eta=args.dcp_eta,
             )
         if args.tta:
             return lambda lr_u8, sc: sr_tta(base, lr_u8, sc)

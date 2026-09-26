@@ -469,3 +469,27 @@ def build_wavelet_dual(size: str = "S", **kw) -> WaveletDualUNet:
     if not kw.get("base"):
         kw["base"] = {"XS": 32, "S": 64, "M": 96, "B": 128}.get(str(size).upper(), 64)
     return WaveletDualUNet(**kw)
+
+
+class LoraUNet(nn.Module):
+    """Innovation #4 (adaptation, cheap): wrap a trained SR net with a low-rank residual
+    adapter  y = base(x) + Up(SiLU(Mid(Down(x))))  whose last conv is zero-init (step-0 ==
+    base).  Freeze the base and train only the adapter -> a small, data-hungry-light
+    'LoRA-style' branch on top of the 390-pair-pretrained model."""
+
+    def __init__(self, base: nn.Module, r: int = 8, in_ch: int = 3, out_ch: int = 3):
+        super().__init__()
+        self.base = base
+        self.align = int(getattr(base, "align", 1))
+        self.coord_channels = int(getattr(base, "coord_channels", 0) or 0)
+        self.down = nn.Conv2d(in_ch + self.coord_channels, r, 1)
+        self.mid = nn.Conv2d(r, r, 3, padding=1)
+        self.up = nn.Conv2d(r, out_ch, 3, padding=1)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        base = self.base(x, t)
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            a = self.up(F.silu(self.mid(F.silu(self.down(x.float())))))
+        return base.float() + a
