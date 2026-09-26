@@ -6,8 +6,8 @@
 
 ## 0. 一页结论
 
-**交付冠军（×2）：`s1_b64` + BSRGAN 预训练 + 小波高频 Loss(λ8) + EMA + TTA**
-**SSIM 0.9279 · MUSIQ 55.83 · MANIQA 0.3516 · (Y 34.38)**
+**交付冠军（×2）：`s1_b64` + BSRGAN 预训练 + 小波高频 Loss(λ8) + Muon(5e-3) + 移位集成 + EMA + TTA**
+**SSIM 0.9285 · MUSIQ 55.96 · MANIQA 0.3534 · (Y 34.41)**
 
 | 基线 | SSIM | MUSIQ | MANIQA | (Y) |
 |---|---|---|---|---|
@@ -68,7 +68,7 @@ RealSR V3 真实相机配对，Train 406 对（16 早停 val，实训 390），T
 - **mech@5e-3（诚实清单机制项）**：**移位小波 loss p_shift4 = 新非-TTA最优**（**MUSIQ 56.02 / MANIQA .3534 全项目最高**、SSIM持平、Y34.31）；各向异性≈持平；**DTCWT 更差**（死）；**双路小波U-Net 明显负**（死）。**新交付候选 = 预训练+Muon5e-3+λ8+shift4**（+TTA 链式评估中）。N3 对抗(Muon) pretrain→ft 待收。
 
 > 诚实清单总结：四条非回归路线（Mamba/等变/双射小波U-Net/频域rectified-flow）+ 双路小波U-Net + DTCWT 均判负；**只有“小波高频 Loss”及其“移位集成”持续涨点**（已与预训练/Muon/TTA 叠加）。
-- N3 对抗数据多样性（唯一未验的数据 lever，现已在 mech_best 里用 Muon 跑，待收）。
+- **N3 对抗数据多样性（用 Muon 公平重测）：判定中性/无增益**——n3_ft SSIM .9279/MUSIQ 55.57/MANIQA .351，未破平台（低于 shift4）。诚实清单到此判完：**只有“小波高频 Loss + 移位集成”持续涨点**，其余（Mamba/等变/双射小波U-Net/频域flow/双路U-Net/DTCWT/N3）均负或中性。新交付冠军 = 预训练+Muon5e-3+λ8+shift4+TTA（MUSIQ 55.96/MANIQA .3534）。
 
 > **48h 预算重排（硬件实测）**：单个 b64 stride-1 臂已把 4090 跑满（util~100%、390/450W、33/48GB）→ 一个臂独占 ~1.7–3.3h，无法并跑，故 20 个配置扫点=实打实~48h、但边际收益低。已改投**诚实清单**（`run_honest48.sh`）：N3 对抗挖数据多样性（G_phi 攻含小波-HF 的目标）+ Muon momentum/ns_steps + 每尺度独立 λ + LL 项。新增 flag：`--muon-momentum/--muon-ns-steps/--dwt-level-weights`。
 
