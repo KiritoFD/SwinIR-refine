@@ -1,0 +1,18 @@
+/* global tweaks for the RealSR slidev deck */
+:root {
+  --slidev-code-font-size: 0.9rem;
+}
+table {
+  font-variant-numeric: tabular-nums;
+}
+table th {
+  background: #1f4e79 !important;
+  color: #fff;
+}
+table td, table th {
+  padding: 0.28em 0.5em;
+}
+/* smaller dense tables */
+.text-xs table { font-size: 0.82rem; }
+.text-sm table { font-size: 0.92rem; }
+.katex { font-size: 1.08em; }
