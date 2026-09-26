@@ -79,6 +79,8 @@ Full recipes, sweeps and per-run configs: [`exp/FINAL_REPORT.md`](exp/FINAL_REPO
 RCAN / SRResNet / RRDB are being reproduced on the same protocol (`docs/baseline/README.md`
 tracks live status). Model card: 18.7M params, ~2.2 s per 512×512 tile (4090, TTA ×8 excluded).
 
+![Results — official paired protocol](docs/figs/fig_results.png)
+
 ### 2.2 Context — generative SOTA on "RealSR" (**different protocol**, cited not compared)
 RealSR-R1 (arXiv:2506.16796) and TinySR (arXiv:2508.17434) report 22.6–26.3 dB / MANIQA 0.53–0.65
 for StableSR / SeeSR / OSEDiff / ResShift / PASD / PURE / … — a *synthetically re-degraded* input
@@ -86,6 +88,9 @@ for StableSR / SeeSR / OSEDiff / ResShift / PASD / PURE / … — a *synthetical
 full tables + protocol tags in [`docs/baseline/README.md`](docs/baseline/README.md).
 
 ## 3. Ablation highlights (see the chronicle for all arms)
+
+![Ablation Δ PSNR-Y](docs/figs/fig_ablation.png)
+
 | Change | Δ PSNR-Y | Perceptual | Cost |
 |---|---|---|---|
 | stride-2 → stride-1 stem | **+0.38** | ↑ | fewer params |
@@ -125,12 +130,16 @@ tags.
 At ×2 the binding wall is **registration**; our **34.41** is inside the 34.4–35.7 ceiling band.
 (×3 is under-tuned here → real headroom; ×4 is near its 31.2 ceiling.)
 
+![Ceiling decomposition](docs/figs/fig_ceiling.png)
+
 ## 7. Perception–distortion tradeoff, reproduced
 Same test set, same protocol, our two arms: regression **34.41 dB / 0.9285 SSIM** vs generative
 **28.36 dB / 0.790 SSIM** with **higher MUSIQ, lower MANIQA** — matching Blau & Michaeli
 (CVPR 2018). Chasing more fidelity means regressing to the conditional mean; chasing perception
 means injecting unverifiable high frequencies. On RealSR the fidelity frontier is physics-capped
 and the realism frontier is data-capped.
+
+![Perception-distortion tradeoff](docs/figs/fig_tradeoff.png)
 
 ## 8. Repository layout
 ```
