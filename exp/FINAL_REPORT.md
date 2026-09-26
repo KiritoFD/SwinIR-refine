@@ -423,3 +423,142 @@ python -m diffusion.eval_official --ckpt <ckpt> --mode pixel --objective reg --i
 
 > 说明：所有 campaign 均走 `scripts/server/run_*.sh`（tmux 会话 + 逐臂 `wait_gpu` + `eval.json` 幂等跳过），支持断点续跑；本轮多次因用户重排指令用 `tmux kill-session` 中止并在改配后重启，历史产物保留于各自根目录。
 
+---
+
+# 附录 D — 数据审计发现（写入前逐 run 核 `args.json` 才暴露）
+
+1. **Phase M 的 batch 混杂（重要）**：`muon_tune/*` 9 臂的 `args.json` 显示 **`batch=8`**（`run_muon_first.sh` 的 `BASE` 漏写 `--batch`，train_pixel 默认 8），而 champmuon / `mech_best` / `muon_ab` 均为 `batch=128`。→ **Phase M 内部相互可比（都 bs=8），但与 bs=128 的 base/冠军直接横比不公平**；“9 偏离全 < base”部分反映 batch 差。**影响面限定**：① Muon 最优=lr5e-3 仍成立——由 `muon_ab`(bs128, 零预训练) 与 `champmuon`(bs128) 两套独立佐证；② momentum/ns_steps/aux-lr/wd 的 Phase M 结论仅“bs=8 下成立”，**若要严谨需 bs=128 复验**（本轮未做，登记为遗留项）。
+2. **`plan12/mamba_c128`**：`steps=1600 batch=320 num_res=4 native_lr=-1(auto)`——是 Mamba 早期**速度/可行性探针**（仅 1600 步、欠训），Y 32.55 不代表收敛，正式 Mamba 结论以 `mamba_matrix` 为准。
+3. **`pixel_flow`/`latent_*` 早期矩阵**：`lr_patch=256 steps=22000 batch=28~96 lr=1e-4 ema=0.999`——DiT 全图扩散早期配置（`lp=256`→HR512 tile 巨大故 batch 很小），均为底噪证伪前的探索，判负口径见 §3。
+4. **`muon_ab` AdamW 对照** 的 `args.json` 里 `muon_lr=0.002` 仅为默认占位（该臂实际 optimizer=adamw），不影响对比。
+5. **`mech_best/n3_ft` 与 `muon_mech/n3muon/ft`** 分属两条链（前者 bs128@5e-3、后者 handicap bs128@2e-3）；两者 ft init 均取自各自对抗预训练 ckpt。mech_best 版（5e-3）为 N3 的正式判定数。
+
+---
+
+# 附录 E — 逐 run 配置台账（experiments/ 全树 106 run，原样可审计）
+
+> `mtime [tag] 路径`（tag: iqa=带IQA / off=eval_official无IQA / TTA）；下一行 config；再下一行 dwt旗标 + 结果。共享默认：`--backbone unet --size S --mult 1,2,4,4 --num-res 2 --attn-levels 2,3 --native-lr 0 --objective reg --residual 1 --lr-patch 64 --ema 0.999 --warmup 500 --decoded-manifest data/decoded/manifest.json --cache-data 0 --num-workers 12`。`–`=默认/未设。
+
+```
+# —— 阶段A / 底噪 / 扩散矩阵（多为 iqa_eval 重打分；原始 eval_official 见下）——
+(阶段A/Diffusion/iqa_eval 各 run 的配置详列于 PROGRESS_REPORT / STAGE_SUMMARY；
+ iqa_eval 重打分产物本身不携 args.json，故台账从 diffusion/ 原始 run 行记录。)
+
+09-16 20:58 [off] diffusion/latent_reg_flux
+    base=– mult=– nr=– att=– nlr=– sc=2 lp=256 | adamw lr=0.0001 st=22000 bs=64 ema=0.999 wu=500
+    SSIM=0.8836 Y=31.1234 n=100   (无IQA)
+09-17 03:49 [off] diffusion/pixel_flow
+    lp=64 | adamw lr=0.0001 st=16000 bs=28
+    SSIM=0.5504 Y=26.7913 n=100   (无IQA; <bicubic)
+09-17 10:37 [off] diffusion/latent_flow_flux_XS
+    lp=256 | adamw lr=0.0001 st=22000 bs=96
+    SSIM=0.7359 Y=27.0532 n=100
+09-17 13:46 [off] diffusion/latent_flow_res
+    lp=256 | adamw lr=0.0001 st=22000 bs=64
+    SSIM=0.8293 Y=29.4617 n=100
+
+# —— U-Net 线（容量/形状/FFN/预训练）——
+09-18 08:15 [off] diffusion/s1_pretrain_b64/b64_finetune
+    base=64 sc=2 | adamw lr=0.0003 st=10000 bs=128 init=ckpt_best.pt
+    SSIM=0.9252 Y=34.1889 n=100   (=iqa_eval/s1_b64_pretrained)
+09-18 14:23 [iqa] diffusion/shape_sweep/1122_b96
+    base=96 mult=1,1,2,2 | adamw st=10000 bs=96
+    SSIM=0.9236 MUSIQ=54.982 MANIQA=0.3403 Y=34.0364
+09-18 15:57 [iqa] diffusion/shape_sweep/1124_b80
+    base=80 mult=1,1,2,4 | adamw st=10000 bs=128
+    SSIM=0.9235 MUSIQ=54.540 MANIQA=0.3385 Y=34.0521
+09-18 19:28 [iqa] diffusion/capacity/b128   (1244_b128)
+    base=128 | adamw st=10000 bs=64
+    SSIM=0.9249 MUSIQ=55.418 MANIQA=0.3434 Y=34.1560
+09-19 09:06 [iqa] diffusion/capacity/b64_ffn
+    base=64 ffn | adamw st=10000 bs=96
+    SSIM=0.9250 MUSIQ=54.739 MANIQA=0.3389 Y=34.1580
+09-19 23:28 [iqa] diffusion/plan12/mamba_c128   (速度探针, 欠训)
+    base=128 nr=4 nlr=-1 | adamw st=1600 bs=320
+    SSIM=0.9029 MUSIQ=45.903 MANIQA=0.2989 Y=32.5492
+
+# —— 三新臂 ——
+09-19 12:10 [iqa] diffusion/new_arms/s1_b64_coord     coord
+    SSIM=0.9237 MUSIQ=55.025 MANIQA=0.3409 Y=34.0848
+09-19 14:08 [iqa] diffusion/new_arms/s1_b64_froute     froute
+    SSIM=0.9240 MUSIQ=54.903 MANIQA=0.3405 Y=34.0883
+
+# —— 小波时代 round1-2（零预训练 b64, adamw st=10000 bs=128）——
+09-20 16:24 [iqa] wave_arms/s1_b64_dwt_w1   dwt{w1 lv2 haar sh1}
+    SSIM=0.9258 MUSIQ=55.381 MANIQA=0.3451 Y=34.1895
+09-20 17:09 [iqa] wave_arms/s1_b64_dwt_w3   dwt{w3}
+    SSIM=0.9253 MUSIQ=54.828 MANIQA=0.3418 Y=34.2199
+09-20 20:30 [iqa] wave_arms/s1_b64_equiv    equiv (st=20000 bs=64)
+    SSIM=0.9243 MUSIQ=55.438 MANIQA=0.3403 Y=34.0379
+09-21 02:20 [iqa] wave_arms/s1_b64_dwt_w2   dwt{w2}
+    SSIM=0.9261 MUSIQ=55.434 MANIQA=0.3466 Y=34.2213
+09-21 03:31 [iqa/TTA] wave_arms/s1_b64_dwt_w5  dwt{w5}
+    iqa SSIM=0.9262 MUSIQ=55.342 MANIQA=0.3472 Y=34.2397 | TTA Y=34.3257
+
+# —— 小波时代 round3-5（预训练 init=ckpt_best.pt, adamw st=10000 bs=128）——
+09-21 05:06 [iqa] stack_dwt/b64_pre_dwt1    dwt{w1}
+    SSIM=0.9264 MUSIQ=55.810 MANIQA=0.3501 Y=34.1867
+09-21 14:35 [iqa/TTA] stack_dwt/b64_pre_dwt8  dwt{w8}
+    iqa SSIM=0.9271 MUSIQ=55.870 MANIQA=0.3513 Y=34.2781 | TTA Y=34.3772
+09-21 18:06 [iqa] stack_dwt/b64_pre_dwt6    dwt{w6}  SSIM=0.9270 MUSIQ=55.830 Y=34.2762
+(另有 dwt2/3/5/7/10 及 dwt8 的 db2/db4/db2a，配置=预训练init+对应 dwt 旗标，数值见 §A.5)
+09-23 06:46 stack_dwt/b64_pre_dwt8_db2  dwt{w8 db2}; 09-23 08:26 _db4 dwt{w8 db4}
+
+# —— 双射小波 U-Net（wave_unet，dwtunet）——
+(dwtunet / dwtunet_dw1 见 §A.5；dwt_unet=True 旗标，zero-pretrain)
+
+# —— ×3 / ×4 迁移（zero-pretrain adamw st=10000；×3 bs96 lp48, ×4 bs128 lp32）——
+09-22 09:07 scale_3/s1_b64_plain   sc=3 lp=48  SSIM=0.8687 MUSIQ=51.786 Y=31.0383
+09-22 17:14 scale_4/s1_b64_plain   sc=4 lp=32  SSIM=0.8295 MUSIQ=47.146 Y=29.4156
+09-22 12:32 scale_3/s1_b64_dwt5 dwt{w5} Y=31.1164; 09-23 00:53 scale_4/s1_b64_dwt5 Y=29.5106
+09-23 12:10 scale_3/s1_b64_dwt1 dwt{w1} Y=31.0601; 09-23 18:46 _dwt2 dwt{w2} SSIM=0.8709 Y=31.1300
+
+# —— Muon 时代 A：muon_ab（零预训练 b64+λ8, adamw/muon, st=10000 bs=128）——
+09-24 06:57 [iqa] muon_ab/muon_adamw  adamw lr=0.0003 dwt{w8}  SSIM=0.9259 MUSIQ=55.464 MANIQA=0.3470 Y=34.2417
+09-24 08:33 muon_muon   muon mlr=0.002 dwt{w8} SSIM=0.9279 MUSIQ=55.818 MANIQA=0.3512 Y=34.3935
+09-24 10:20 muon_lr1e3  muon mlr=0.001 Y=34.3006
+09-24 11:51 muon_lr5e3  muon mlr=0.005 SSIM=0.9280 MUSIQ=55.974 MANIQA=0.3527 Y=34.3914
+09-24 14:03 muon_lr1e2  muon mlr=0.01  Y=34.3280
+
+# —— Muon 时代 B：muon_tune（Phase M；★batch=8 confound, init=ckpt_best.pt, muon lr base）——
+09-24 19:50 m_lr2e3 mlr=0.002 bs=8 SSIM=0.9261 Y=34.2528
+09-24 19:58 m_lr8e3 mlr=0.008 bs=8 SSIM=0.9244 Y=34.1554
+09-24 20:09 m_lr12e3 mlr=0.012 bs=8 SSIM=0.9225 Y=34.0053
+09-24 20:19 m_mom090 mom=0.9 bs=8 SSIM=0.9260 Y=34.2683
+09-24 20:29 m_mom098 mom=0.98 bs=8 SSIM=0.9243 Y=34.1434
+09-24 20:47 m_ns7 ns=7 bs=8 SSIM=0.9256 Y=34.2419
+09-24 20:56 m_aux3e4 aux=0.0003 bs=8 SSIM=0.9252 Y=34.2188
+09-24 21:05 m_wd1e2 wd=0.01 bs=8 SSIM=0.9250 Y=34.2135
+09-24 20:31 m_ns3 ns=3 bs=8 SSIM=0.9248 Y=34.2397
+
+# —— Muon 时代 C：mech_best（★bs=128, muon 5e-3/mom0.95/ns5, init=预训练冠军）——
+09-25 14:48 [iqa/TTA] mech_best/p_shift4   dwt{w8 lv2 haar sh4}
+    iqa SSIM=0.9277 MUSIQ=56.022 MANIQA=0.3534 Y=34.3096 | TTA Y=34.4063
+09-25 16:31 [iqa/TTA] mech_best/p_aniso    dwt{w8 haar sh4 b(1.5,0.8,1)}
+    iqa SSIM=0.9277 MUSIQ=55.921 MANIQA=0.3532 Y=34.3099 | TTA Y=34.4074
+09-25 17:13 mech_best/p_dtcwt dwt{w8 lv2 dtcwt sh1} SSIM=0.9251 MUSIQ=55.951 MANIQA=0.3457 Y=34.1541
+09-26 00:16 [iqa/TTA] mech_best/n3_ft (init=n3对抗预训练) dwt{w8}
+    iqa SSIM=0.9279 MUSIQ=55.570 MANIQA=0.3514 Y=34.2764 | TTA Y=34.3882
+
+# —— Muon 时代 D：muon_mech（★handicap bs128@lr2e-3；含双路U-Net/N3）——
+09-24 22:19 muon_mech/p_shift4 muon mlr=0.002 dwt{w8 haar sh4} SSIM=0.9276 MUSIQ=55.898 Y=34.2845
+09-24 22:56 muon_mech/p_dtcwt mlr=0.002 dwt{dtcwt} Y=34.1587
+09-25 00:49 muon_mech/p_lv3shift dwt{w8 lv3 haar sh4} Y=34.3001
+09-25 03:02 muon_mech/p_aniso dwt{w8 haar sh4 b(1.5,0.8,1)} Y=34.2656
+09-25 04:03 muon_mech/z_dual     DUAL dwt{w8 haar} SSIM=0.9214 MUSIQ=53.911 Y=33.8451
+09-25 04:24 muon_mech/z_dual_shift4 DUAL dwt{w8 haar sh4} SSIM=0.9207 Y=33.8555
+09-25 04:46 muon_mech/z_dual_dtcwt  DUAL dwt{w8 dtcwt} SSIM=0.9105 MUSIQ=51.344 Y=33.1622
+09-25 08:48 muon_mech/n3muon/pretrain  ADV mlr=0.002 st=25000 dwt{w8} (OOD直接评, 非有效) SSIM=0.7604 Y=22.3039
+09-25 10:54 [iqa/TTA] muon_mech/n3muon/ft init=对抗ckpt dwt{w8} SSIM=0.9275 MUSIQ=55.896 MANIQA=0.3531 Y=34.2428
+
+# —— 频域 rectified flow（方向C；refine 头 st=8000 bs=64 lr=2e-4, 从 b64_pre_dwt8 起）——
+09-24 05:16 [iqa] hf_flow/hf_x2/refine_s0.10  n=62(OOM丢38) SSIM=0.7622 Y=31.0746
+09-24 05:16 refine_s0.20 SSIM=0.5414 Y=27.1776; refine_s0.35 SSIM=0.3482 Y=23.1929
+
+# —— 交付态 Muon 微调 ——
+09-25 stack_dwt/b64_pre_dwt8_muon muon mlr=0.005 init=预训练冠军 dwt{w8}
+    SSIM=0.9280 MUSIQ=55.850 MANIQA=0.3521 Y=34.2894 | +TTA SSIM=0.9289 MUSIQ=55.751 Y=34.4048
+```
+
+> 台账说明：`iqa_eval/` 下的阶段A/扩散重打分产物（bicubic/E1/E2/A0/E11/dit_*/s1_b32-64/latent_flow_* 等，见 §A.1–A.2）是对应原始 run 的再评估，其 config 即原始 run（diffusion 矩阵）+ 无 `--iqa` 差异；原始 run 的 `eval_official/eval.json` 已在上方以 `[off]` 行登记。全部 106 个带指标 run 均已在上文 §A 母表或本台账出现。
+

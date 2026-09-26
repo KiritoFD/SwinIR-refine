@@ -27,7 +27,7 @@ say() { echo; echo "==================== $*  [$(date +%m-%d\ %H:%M:%S)] ========
 wait_gpu() { for _ in $(seq 1 240); do M=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits|head -1); (( M < 2000 )) && return 0; sleep 15; done; }
 # common: unet S base64 native-lr0 reg residual dwt lambda8 ; Muon default 5e-3
 BASE="--backbone unet --size S --base 64 --mult 1,2,4,4 --num-res 2 --native-lr 0 --objective reg \
-  --residual 1 --decoded-manifest data/decoded/manifest.json --lr-patch 64 --amp --num-workers 12 \
+  --residual 1 --decoded-manifest data/decoded/manifest.json --lr-patch 64 --batch 128 --amp --num-workers 12 \
   --cache-data 0 --warmup 500 --steps 10000 --ema 0.999 --optimizer muon --muon-lr 5e-3 \
   --dwt-loss --dwt-weight 8 --dwt-levels 2 --eval-every 500 --val-pairs 16 --patience 15 \
   --min-steps 3000 --val-eval-steps 8 --save-every 2500"
