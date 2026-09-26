@@ -1,10 +1,16 @@
-"""Mamba (s1 d96) MFU at the largest batch that fits — its huge stride-1 activation
-footprint is itself part of the finding. Tries batches 8/4/2/1."""
+"""Measure MambaSR MFU for BOTH scan backends, forward+backward:
+ - mamba_ssm : official fused CUDA selective-scan kernel (what the Mamba matrix
+               actually trained with — see logs `backend=mamba_ssm ... available=True`).
+ - torch     : pure-PyTorch parallel-scan S6 fallback (fp32, 4-direction batch stack).
+Uses torch FlopCounterMode (counts matmul/conv; the fused scan kernel's own flops are
+under-counted, so mamba_ssm's achieved TFLOPS here is a LOWER bound on its true compute).
+"""
 import time, gc, torch
 from torch.utils.flop_counter import FlopCounterMode
-from diffusion.mamba_sr import build_mambasr
+from diffusion.mamba_sr import build_mambasr, mamba_ssm_available
 
 dev, peak, HR = "cuda", 165.2e12, 128
+print("mamba_ssm available:", mamba_ssm_available())
 
 
 def step(model, x, t, opt):
@@ -15,66 +21,34 @@ def step(model, x, t, opt):
     opt.step()
 
 
-def fwd_only(m, x, t):
-    with torch.autocast("cuda", dtype=torch.bfloat16):
-        return m(x, t).float().pow(2).mean()
+def measure(backend, bs):
+    m = build_mambasr("S", input_size=HR, in_channels=3, dim=96, num_groups=2,
+                      num_res=3, d_state=16, expand=2.0, backend=backend).to(dev)
+    x = torch.randn(bs, 3, HR, HR, device=dev); t = torch.zeros(bs, device=dev)
+    opt = torch.optim.AdamW(m.parameters(), lr=1e-4)
+    with FlopCounterMode(display=False) as fc:
+        step(m, x, t, opt)
+    flops = fc.get_total_flops()
+    for _ in range(5):
+        step(m, x, t, opt)
+    torch.cuda.synchronize(); s = time.perf_counter()
+    iters = max(5, int(64 // bs))
+    for _ in range(iters):
+        step(m, x, t, opt)
+    torch.cuda.synchronize(); sec = (time.perf_counter() - s) / iters
+    tf = flops / sec
+    print(f"[{backend:9s}] bs={bs:>2d}  fwd+bwd={flops/bs/1e9:7.1f} GFLOP/img  "
+          f"{sec/1:.3f}s/iter  achieved>={tf/1e12:6.1f} TFLOPS  "
+          f"MFU>={100*tf/peak:5.1f}%  peakmem={torch.cuda.max_memory_allocated()/1e9:5.1f}GB")
+    del m, opt, x, t
+    gc.collect(); torch.cuda.empty_cache()
 
 
-ran = False
-for bs in (8, 4, 2, 1):
-    try:
-        m = build_mambasr("S", input_size=HR, in_channels=3, dim=96, num_res=4,
-                          backend="cuda", shift=False).to(dev)
-        x = torch.randn(bs, 3, HR, HR, device=dev); t = torch.zeros(bs, device=dev)
-        opt = torch.optim.AdamW(m.parameters(), lr=1e-4)
-        with FlopCounterMode(display=False) as fc:
-            step(m, x, t, opt)
-        flops = fc.get_total_flops()
-        for _ in range(5):
-            step(m, x, t, opt)
-        torch.cuda.synchronize(); s = time.perf_counter()
-        for _ in range(15):
-            step(m, x, t, opt)
-        torch.cuda.synchronize(); sec = (time.perf_counter() - s) / 15
-        print(f"Mamba s1 d96 FORWARD+BACKWARD bs={bs}  {flops/bs/1e9:.1f} GFLOP/img  "
-              f"achieved={flops/sec/1e12:.1f} TFLOPS  MFU={100*flops/sec/peak:.1f}%  "
-              f"peakmem={torch.cuda.max_memory_allocated()/1e9:.1f}GB")
-        ran = True
-        break
-    except torch.cuda.OutOfMemoryError:
-        print(f"Mamba bs={bs} fwd+bwd: OOM (backward needs too much activation)")
+for backend in ("mamba_ssm", "torch"):
+    for bs in (16, 8, 4, 2, 1):
         try:
-            del m, opt
-        except Exception:
-            pass
-        gc.collect(); torch.cuda.empty_cache()
-
-if not ran:
-    for bs in (16, 8, 4, 2):
-        try:
-            m = build_mambasr("S", input_size=HR, in_channels=3, dim=96, num_res=4,
-                              backend="cuda", shift=False).to(dev).eval()
-            x = torch.randn(bs, 3, HR, HR, device=dev); t = torch.zeros(bs, device=dev)
-            with torch.no_grad(), FlopCounterMode(display=False) as fc:
-                fwd_only(m, x, t)
-            flops = fc.get_total_flops()
-            for _ in range(5):
-                with torch.no_grad():
-                    fwd_only(m, x, t)
-            torch.cuda.synchronize(); s = time.perf_counter()
-            for _ in range(20):
-                with torch.no_grad():
-                    fwd_only(m, x, t)
-            torch.cuda.synchronize(); sec = (time.perf_counter() - s) / 20
-            print(f"Mamba s1 d96 FORWARD-ONLY bs={bs}  {flops/bs/1e9:.1f} GFLOP/img  "
-                  f"achieved={flops/sec/1e12:.1f} TFLOPS  fwd-MFU={100*flops/sec/peak:.1f}%  "
-                  f"peakmem={torch.cuda.max_memory_allocated()/1e9:.1f}GB  "
-                  f"(training backward OOMs even at bs=1 -> the real infra cost)")
+            measure(backend, bs)
             break
         except torch.cuda.OutOfMemoryError:
-            print(f"Mamba bs={bs} fwd-only: OOM too")
-            try:
-                del m
-            except Exception:
-                pass
+            print(f"[{backend:9s}] bs={bs} OOM; halving")
             gc.collect(); torch.cuda.empty_cache()
