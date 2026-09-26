@@ -30,8 +30,10 @@ lower** than shave-4 or full-range RGB variants of the same model.
 | SwinIR-light | Transformer | 0.61M | 32.88 | 0.9026 | 45.43 | 0.302 | [ours] `exp/FINAL_REPORT.md` §1 |
 | SwinIR-largeish | Transformer | 3.96M | 32.97 | 0.9058 | 46.79 | 0.305 | [ours] §1 |
 | E11 Mod-SwinIR + Align-L1 | Transformer | 4.05M | 33.47 | 0.9143 | 49.15 | 0.309 | [ours] §1 |
-| EDSR (re-impl., ×2) | CNN | ~43M→slim | *pending* | *pending* | — | — | **[todo]** §3 |
-| RCAN (re-impl., ×2) | CNN+CA | *pending* | *pending* | *pending* | — | — | **[todo]** §3 |
+| **EDSR-baseline (repro.)** | CNN | 1.19M | **33.60** | **0.9167** | 53.14 | 0.327 | **[ours]** `baselines/edsr_x2` |
+| RCAN (repro.) | CNN+CA | ~4M | *pending* | *pending* | — | — | **[running]** |
+| SRResNet (repro.) | CNN | ~1.5M | *pending* | *pending* | — | — | **[queued]** |
+| RRDB (repro.) | CNN-dense | ~16.7M | *pending* | *pending* | — | — | **[queued]** |
 | s1_b64 (AdamW, zero-pretrain) | U-Net | 18.7M | 34.11 | 0.9246 | 55.22 | 0.342 | [ours] |
 | **Ours (full recipe + TTA)** | **U-Net stride-1** | **18.7M** | **34.41** | **0.9285** | **55.96** | **0.3534** | [ours] |
 | our latent rectified-flow | Generative | 32.9M | 28.36 | 0.790 | 50.12 | 0.224 | [ours] |
@@ -95,9 +97,11 @@ lower** than shave-4 or full-range RGB variants of the same model.
 | Baseline | Why | How | Status |
 |---|---|---|---|
 | **SwinIR** (light + largeish) | strongest modern Transformer | re-implemented + trained on RealSR (stage A) | **done** (A-strict §1a) |
-| **EDSR** | canonical CNN baseline (Lim et al. CVPR17) | faithful EDSR (residual blocks, sub-pixel ×2) re-implemented in our harness, trained on RealSR Train, A-strict eval | **[todo]** — queued |
-| **RCAN** | canonical attention CNN | as above | **[todo]** — queued |
-| **RRDB / Real-ESRGAN (blind)** | the dominant practical baseline | official ×4 weights, applied to RealSR LR (D-blind), evaluated under our harness | **[todo]** — queued |
+| **EDSR-baseline** | canonical CNN baseline (Lim et al. CVPR17) | faithful EDSR body (pre-upsampling residual variant), trained on RealSR Train, A-strict eval | **done** — Y 33.60 / SSIM 0.9167 / MANIQA 0.327 / MUSIQ 53.14 (+TTA 33.64/0.9173) |
+| **RCAN** | canonical attention CNN | as above | **running** (`baserep`) |
+| **SRResNet** | GAN-era SR backbone (SRGAN generator body, w/ BN) | as above | **queued** (`baserep2`) |
+| **RRDB** | ESRGAN/Real-ESRGAN body (16.7M) | as above | **queued** (`baserep2`) |
+| Real-ESRGAN / BSRGAN (pretrained, D-blind) | dominant practical baseline | needs official weights (external download) + RRDB arch; **not runnable in this sandbox** | cite [lit] w/ D-blind tag |
 | LP-KPN | benchmark origin (Cai ICCV19) | no modern code path; number taken from paper (×4 regime) | [lit] only |
 | StableSR / SeeSR / OSEDiff / ResShift | diffusion SOTA | requires SD backbone + weights; kept as [lit] with protocol tags | not reproduced (out of scope) |
 

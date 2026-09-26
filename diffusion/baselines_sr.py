@@ -115,3 +115,114 @@ def build_rcan(size="S", **kw):
     if not kw.get("nf"):
         kw["nf"] = preset.get(str(size).upper(), 64)
     return RCAN(**kw)
+
+
+# --------------------------------------------------------------------- SRResNet
+
+
+class SRResNetBlock(nn.Module):
+    """SRResNet residual block: conv-BN-ReLU-conv-BN (BN is its signature vs EDSR)."""
+
+    def __init__(self, nf, k=3):
+        super().__init__()
+        self.body = nn.Sequential(
+            nn.Conv2d(nf, nf, k, padding=k // 2), nn.BatchNorm2d(nf), nn.PReLU(),
+            nn.Conv2d(nf, nf, k, padding=k // 2), nn.BatchNorm2d(nf),
+        )
+
+    def forward(self, x):
+        return x + self.body(x)
+
+
+class SRResNet(nn.Module):
+    def __init__(self, input_size=128, in_channels=3, out_channels=3, nf=64, n_res=16,
+                 scale=2, use_checkpoint=False, coord_channels=0, **_u):
+        super().__init__()
+        self.in_channels = int(in_channels)
+        self.out_channels = int(out_channels or in_channels)
+        self.scale = int(scale)
+        self.coord_channels = 0
+        self.head = nn.Conv2d(self.in_channels, nf, 9, padding=4)
+        self.body = nn.Sequential(*[SRResNetBlock(nf) for _ in range(n_res)])
+        self.body_tail = nn.Sequential(nn.Conv2d(nf, nf, 3, padding=1), nn.BatchNorm2d(nf))
+        self.tail = nn.Conv2d(nf, self.out_channels, 3, padding=1)
+        self.align = 1
+
+    def forward(self, x, t=None):
+        f = self.body(self.head(x))
+        f = self.body_tail(f) + self.head(x)
+        return self.tail(f)  # pre-upsampling residual form (see module docstring)
+
+
+def build_srresnet(size="S", **kw):
+    kw.pop("patch_size", None)
+    preset = {"XS": 32, "S": 64, "M": 96, "B": 128}
+    if not kw.get("nf"):
+        kw["nf"] = preset.get(str(size).upper(), 64)
+    return SRResNet(**kw)
+
+
+# ---------------------------------------------------------------------- RRDB
+
+
+class DenseBlock(nn.Module):
+    """ESRGAN/Real-ESRGAN dense block: 5 convs, each seeing all previous features,
+    residual-scaled by beta."""
+
+    def __init__(self, nf, gc=32, k=3, beta=0.2):
+        super().__init__()
+        self.beta = beta
+        self.convs = nn.ModuleList([
+            nn.Conv2d(nf + i * gc, gc, k, padding=k // 2) for i in range(5)
+        ])
+        self.lff = nn.Conv2d(nf + 5 * gc, nf, 1)
+        self.act = nn.LeakyReLU(0.2, inplace=True)
+
+    def forward(self, x):
+        feats = [x]
+        for conv in self.convs:
+            feats.append(self.act(conv(torch.cat(feats, 1))))
+        return self.lff(torch.cat(feats, 1)) * self.beta + x
+
+
+class RRDB(nn.Module):
+    """Residual-in-residual dense block: 3 DenseBlocks, residual-scaled by beta."""
+
+    def __init__(self, nf, gc=32, beta=0.2, n_dense=3):
+        super().__init__()
+        self.beta = beta
+        self.blocks = nn.Sequential(*[DenseBlock(nf, gc) for _ in range(n_dense)])
+
+    def forward(self, x):
+        return self.blocks(x) * self.beta + x
+
+
+class RRDBNet(nn.Module):
+    """RRDB backbone (ESRGAN lineage), pre-upsampling residual variant for this
+    harness (the standard sub-pixel upsampler would double-upsample the HR input)."""
+
+    def __init__(self, input_size=128, in_channels=3, out_channels=3, nf=64, n_basic=3,
+                 n_dense=3, gc=32, scale=2, use_checkpoint=False, coord_channels=0, **_u):
+        super().__init__()
+        self.in_channels = int(in_channels)
+        self.out_channels = int(out_channels or in_channels)
+        self.scale = int(scale)
+        self.coord_channels = 0
+        self.head = nn.Conv2d(self.in_channels, nf, 3, padding=1)
+        self.body = nn.Sequential(*[RRDB(nf, gc, 0.2, n_dense) for _ in range(n_basic)])
+        self.body_tail = nn.Conv2d(nf, nf, 3, padding=1)
+        self.tail = nn.Conv2d(nf, self.out_channels, 3, padding=1)
+        self.align = 1
+
+    def forward(self, x, t=None):
+        f = self.head(x)
+        f = self.body_tail(self.body(f)) + f
+        return self.tail(f)
+
+
+def build_rrdb(size="S", **kw):
+    kw.pop("patch_size", None)
+    preset = {"XS": 32, "S": 64, "M": 96, "B": 128}
+    if not kw.get("nf"):
+        kw["nf"] = preset.get(str(size).upper(), 64)
+    return RRDBNet(**kw)

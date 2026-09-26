@@ -53,10 +53,10 @@ def parse_args():
     p.add_argument("--data-root", default="", help="auto-detected if empty")
     p.add_argument("--out", default=r"G:\RealSR\experiments\diffusion\pixel_dit")
     p.add_argument("--objective", default="flow", choices=["flow", "reg"])
-    p.add_argument("--backbone", default="dit", choices=["dit", "unet", "mamba", "edsr", "rcan"],
+    p.add_argument("--backbone", default="dit", choices=["dit", "unet", "mamba", "edsr", "rcan", "srresnet", "rrdb"],
                    help="dit = token transformer; unet = conv encoder/decoder with skips; "
-                        "mamba = stride-1 VSS (2D selective scan), reg-only; edsr/rcan = classic "
-                        "SR baselines (residual blocks / residual channel-attention, sub-pixel up)")
+                        "mamba = stride-1 VSS (2D selective scan), reg-only; edsr/rcan/srresnet/rrdb = "
+                        "classic SR baselines (pre-upsampling residual variants of the canonical archs)")
     p.add_argument("--size", default="S", choices=["XS", "S", "M", "B"])
     p.add_argument("--patch", type=int, default=2)
     # U-Net only (ignored by the DiT path)
@@ -443,15 +443,16 @@ def main():
     is_flow = args.objective == "flow"
     in_ch = 6 if is_flow else 3
     kw = {"input_size": hr_px, "patch_size": args.patch, "in_channels": in_ch, "use_checkpoint": args.grad_ckpt}
-    if args.backbone in ("edsr", "rcan"):
+    if args.backbone in ("edsr", "rcan", "srresnet", "rrdb"):
         kw.pop("patch_size", None)
         kw["scale"] = int(args.scale)
         if args.base:
             kw["nf"] = int(args.base)
-        from .baselines_sr import build_edsr, build_rcan
-        model = (build_edsr if args.backbone == "edsr" else build_rcan)(args.size, **kw).to(device)
+        from .baselines_sr import build_edsr, build_rcan, build_srresnet, build_rrdb
+        _bmap = {"edsr": build_edsr, "rcan": build_rcan, "srresnet": build_srresnet, "rrdb": build_rrdb}
+        model = _bmap[args.backbone](args.size, **kw).to(device)
         nparam = sum(p.numel() for p in model.parameters()) / 1e6
-        print(f"  {args.backbone.upper()} nf={model.head.out_channels} "
+        print(f"  {args.backbone.upper()} nf={model.head.out_channels if hasattr(model.head,'out_channels') else '-'} "
               f"scale={args.scale} align={model.align} params={nparam:.2f}M "
               f"(classic pre-upsampling baseline, returns residual)", flush=True)
     elif args.backbone == "unet":
@@ -514,7 +515,7 @@ def main():
         model = build_dit(args.size, **kw).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     _name = {"unet": "PixelUNet", "dit": "PixelDiT", "mamba": "MambaSR",
-             "edsr": "EDSR", "rcan": "RCAN"}.get(args.backbone, args.backbone.upper())
+             "edsr": "EDSR", "rcan": "RCAN", "srresnet": "SRResNet", "rrdb": "RRDB"}.get(args.backbone, args.backbone.upper())
     print(
         f"{_name}-{args.size} {n_params:.2f}M  "
         f"backbone={args.backbone} objective={args.objective}  HR={hr_px} "
