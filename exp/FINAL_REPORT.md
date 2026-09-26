@@ -258,3 +258,168 @@ python -m diffusion.eval_official --ckpt <ckpt> --mode pixel --objective reg --i
 **结果目录**：`experiments/diffusion/{wave_arms,wave_unet,stack_dwt,scale_3,scale_4,muon_ab,muon_tune,muon_mech,mech_best,hf_flow,mamba_matrix}/<臂>/eval_iqa[/eval_iqa_tta]/eval.json`；链式脚本 `scripts/server/run_*.sh`（tmux + 幂等 + 逐臂 wait_gpu）。**运行规范**：computation-bound 禁 grad-ckpt（显存不够降 batch、锁样本预算 batch×steps）；一臂独占全卡故串行。
 **本波代码提交（git）**：`Mamba 矩阵 → 关线`、`wavelet.py/分频2.0(db/dtcwt/aniso/shift)/双路U-Net`、`train_hf_flow+eval --tta/--hf-head`、`Muon proper(优化器/aux-lr/muon+adv 修复)`、`run_muon_first/run_mech_best/run_tta_best 链 + selector 修复`、本 `FINAL_REPORT` 定稿。
 **诚实边界**：所有 SwinIR 对比是协议A；MANIQA 仅用于真实 SR 输出的相对排序；感知指标逐图有 ~0.1–0.3 抖动，单点 ±0.05dB/±0.1MUSIQ 不作强结论（本目录所有采纳均基于"整段单调一致/跨多指标同向"）；`hf_flow refine_* n=62`（38 张 OOM）与 `muon_mech/n3muon/pretrain`（对抗预训练 ckpt 直接 OOD 评）为过程记录、非有效对比数。
+
+---
+
+# 附录 A — 全量结果母表（experiments/ 树全部 106 个 eval.json）
+
+> 逐 run 完整清单，按根分组。Y=PSNR-Y，感知为主看列。标 *(no-IQA)* 的是早期 `eval_official/eval.json`（未跑 IQA），其 iqa_eval 重打分版列于 §阶段A/矩阵；二者 Y 常一致。标 *(dup)* 为同 run 的另一份记录。标 *(subset n=90/88)* 为 IQA 子集重跑（显存丢对），Y 与全量版略差属正常。
+
+### A.1 阶段A / 基线 / 底噪（`iqa_eval/`，官方 100 对，权威重打分）
+| run | Y | SSIM | MUSIQ | MANIQA |
+|---|---|---|---|---|
+| bicubic_floor | 31.7335 | 0.8876 | 39.396 | 0.2782 |
+| E1_swinir_light (0.61M) | 32.8827 | 0.9026 | 45.427 | 0.3024 |
+| E2_swinir_capmatch (largeish 3.96M) | 32.9735 | 0.9058 | 46.789 | 0.3051 |
+| A0_l1_only (4.05M) | 33.3606 | 0.9123 | 50.070 | 0.3097 |
+| E11_align_loss (4.05M) | 33.4655 | 0.9143 | 49.153 | 0.3089 |
+
+### A.2 扩散 2×2 矩阵 + DiT（`iqa_eval/` 重打分 + `pixel_*`/`latent_*`/`dit` 原始）
+| run | Y | SSIM | MUSIQ | MANIQA | 备注 |
+|---|---|---|---|---|---|
+| dit_pixel_reg_XS (6.28M) | 33.5604 | 0.9159 | 52.541 | 0.3173 | =pixel_reg_XS(dup,no-IQA) |
+| dit_pixel_reg (34.0M) | 33.7627 | 0.9191 | 53.312 | 0.3238 | =pixel_reg(dup,no-IQA);NFE1 回归 |
+| pixel_flow (34.0M) | 26.7913 | 0.5504 | – | – | no-IQA；<bicubic |
+| latent_flow_flux (32.9M) | 28.3614 | 0.7901 | 50.121* | 0.2236* | iqa_eval 子集 n=90 Y27.15/MUSIQ50.12 |
+| latent_flow_flux_XS (5.73M) | 27.0532 | 0.7359 | – | – | no-IQA |
+| latent_flow_res (32.9M) | 29.4617 | 0.8293 | 47.590* | 0.2180* | iqa_eval n=90 Y28.16 |
+| latent_reg_flux (32.9M) | 31.1234 | 0.8836 | 42.239* | 0.2656* | <自身零初始化31.60；iqa_eval n=88 Y31.20 |
+> 另有根目录 `latent_flow_sd`、`latent_reg_flux_lr3e5`、`v1_latent_flow_flux_14k`、`unet_reg`、`unet_1128`、`unet_s1_1244`、`s1_pretrain`、`pretrain/pt_pixel_reg`、`mamba`、`dbg2`、`vae_noise` 存在但**无 eval.json**（底噪/探针/被砍臂/中止），见附录 B。
+
+### A.3 U-Net 容量 / 形状 / FFN / 预训练（`iqa_eval/` + `s1_sweep/` + `capacity/` + `shape_sweep/` + `s1_pretrain_b64/`）
+| run | Y | SSIM | MUSIQ | MANIQA | 参数 |
+|---|---|---|---|---|---|
+| s1_b32 | 33.9445 | 0.9219 | 54.195 | 0.3335 | 4.99M |
+| s1_b40 | 34.0070 | 0.9232 | 54.843 | 0.3391 | 7.58M |
+| s1_b48 | 33.9946 | 0.9238 | 55.258 | 0.3416 | 10.73M |
+| s1_b64 | 34.1083 | 0.9246 | 55.218 | 0.3416 | 18.67M |
+| capacity/b128 (1244_b128) | 34.1560 | 0.9249 | 55.418 | 0.3434 | 72.53M |
+| capacity/b64_ffn | 34.1580 | 0.9250 | 54.739 | 0.3389 | 24.92M |
+| shape_sweep/1122_b96 | 34.0364 | 0.9236 | 54.982 | 0.3403 | 11.50M |
+| shape_sweep/1124_b80 | 34.0521 | 0.9235 | 54.540 | 0.3385 | 18.26M |
+| s1_b64_pretrained (=s1_pretrain_b64/b64_finetune,dup) | 34.1889 | 0.9252 | 55.739 | 0.3474 | 预训练+微调8k |
+| b64_ft15k（后训练11k，阶段B冠军） | 34.1988 | 0.9251 | 55.707 | 0.3470 | 09-19 冠军 |
+> `s1_sweep/{b32,b40,b48,b64}_finetune/eval_official` 为上表的 no-IQA 原始记录（Y 一致）。
+
+### A.4 Mamba 矩阵（`mamba_matrix/` + `plan12/`）
+| run | scale | 样本 | Y | SSIM | MUSIQ | MANIQA |
+|---|---|---|---|---|---|---|
+| u_b64_188k | U-Net 1 | 188k | 33.2535 | 0.9102 | 47.530 | 0.3005 |
+| u_b64_329k | U-Net 1 | 328k | 33.9658 | 0.9221 | 53.879 | 0.3321 |
+| u_b64_439k | U-Net 1 | 439k | 34.0363 | 0.9231 | 54.474 | 0.3359 |
+| m_s2_c96_match | 2 | 328k | 31.6829 | 0.8906 | 40.221 | 0.2817 |
+| m_s2_c96_full | 2 | 1.54M | 33.4182 | 0.9128 | 51.377 | 0.3110 |
+| m_s2_c128_e1 | 2 | 717k | 32.0674 | 0.8992 | 43.342 | 0.2925 |
+| m_s2_c128_e2 | 2 | 179k | 31.8131 | 0.8909 | 40.585 | 0.2825 |
+| m_s1_c96 | 1 | 269k | 32.5674 | 0.9002 | 43.413 | 0.2888 |
+| plan12/mamba_c128 | 2 | 512k | 32.5492 | 0.9029 | 45.903 | 0.2989 |
+
+### A.5 三新臂 / 小波时代 / 机制（本波，全部 100 对）
+| run | Y | SSIM | MUSIQ | MANIQA |
+|---|---|---|---|---|
+| new_arms/s1_b64_coord | 34.0848 | 0.9237 | 55.025 | 0.3409 |
+| new_arms/s1_b64_froute | 34.0883 | 0.9240 | 54.903 | 0.3405 |
+| wave_arms/s1_b64_dwt_w1 (λ1) | 34.1895 | 0.9258 | 55.381 | 0.3451 |
+| wave_arms/s1_b64_dwt_w2 (λ2) | 34.2213 | 0.9261 | 55.434 | 0.3466 |
+| wave_arms/s1_b64_dwt_w3 (λ3) | 34.2199 | 0.9253 | 54.828 | 0.3418 |
+| wave_arms/s1_b64_dwt_w5 (λ5) | 34.2397 | 0.9262 | 55.342 | 0.3472 |
+| wave_arms/s1_b64_dwt_w5 +TTA | 34.3257 | 0.9270 | 55.289 | 0.3477 |
+| wave_arms/s1_b64_equiv | 34.0379 | 0.9243 | 55.438 | 0.3403 |
+| wave_unet/s1_b64_dwtunet_dw1 | 34.1954 | 0.9258 | 55.056 | 0.3440 |
+| wave_unet/s1_b64_dwtunet | 34.0933 | 0.9243 | 54.934 | 0.3410 |
+| stack_dwt/b64_pre_dwt1 | 34.1867 | 0.9264 | 55.810 | 0.3501 |
+| stack_dwt/b64_pre_dwt2 | 34.2363 | 0.9265 | 55.787 | 0.3501 |
+| stack_dwt/b64_pre_dwt3 | 34.2511 | 0.9266 | 55.767 | 0.3501 |
+| stack_dwt/b64_pre_dwt5 | 34.2670 | 0.9270 | 55.767 | 0.3506 |
+| stack_dwt/b64_pre_dwt5 +TTA | 34.3628 | 0.9277 | 55.735 | 0.3509 |
+| stack_dwt/b64_pre_dwt6 | 34.2762 | 0.9270 | 55.830 | 0.3506 |
+| stack_dwt/b64_pre_dwt7 | 34.2784 | 0.9270 | 55.832 | 0.3509 |
+| stack_dwt/b64_pre_dwt8 | 34.2781 | 0.9271 | 55.870 | 0.3513 |
+| stack_dwt/b64_pre_dwt8 +TTA | 34.3772 | 0.9279 | 55.825 | 0.3516 |
+| stack_dwt/b64_pre_dwt8_db2 | 34.2710 | 0.9270 | 55.698 | 0.3501 |
+| stack_dwt/b64_pre_dwt8_db4 | 34.2588 | 0.9269 | 55.633 | 0.3501 |
+| stack_dwt/b64_pre_dwt8_db2a (aniso) | 34.2527 | 0.9270 | 55.686 | 0.3499 |
+| stack_dwt/b64_pre_dwt10 | 34.2876 | 0.9270 | 55.801 | 0.3507 |
+
+### A.6 Muon 时代（全部 @ Muon 5e-3 除标 AdamW 对照）
+| run | Y | SSIM | MUSIQ | MANIQA |
+|---|---|---|---|---|
+| stack_dwt/b64_pre_dwt8_muon | 34.2894 | 0.9280 | 55.850 | 0.3521 |
+| stack_dwt/b64_pre_dwt8_muon +TTA | 34.4048 | 0.9289 | 55.751 | 0.3521 |
+| muon_ab/muon_adamw (AdamW 对照) | 34.2417 | 0.9259 | 55.464 | 0.3470 |
+| muon_ab/muon_lr1e3 | 34.3006 | 0.9272 | 55.990 | 0.3520 |
+| muon_ab/muon_muon (2e-3) | 34.3935 | 0.9279 | 55.818 | 0.3512 |
+| muon_ab/muon_lr5e3 | 34.3914 | 0.9280 | 55.974 | 0.3527 |
+| muon_ab/muon_lr1e2 | 34.3280 | 0.9279 | 55.929 | 0.3527 |
+| muon_tune/m_lr2e3 | 34.2528 | 0.9261 | 55.487 | 0.3482 |
+| muon_tune/m_lr8e3 | 34.1554 | 0.9244 | 55.014 | 0.3436 |
+| muon_tune/m_lr12e3 | 34.0053 | 0.9225 | 54.999 | 0.3411 |
+| muon_tune/m_mom090 | 34.2683 | 0.9260 | 55.365 | 0.3471 |
+| muon_tune/m_mom098 | 34.1434 | 0.9243 | 54.860 | 0.3424 |
+| muon_tune/m_ns3 | 34.2397 | 0.9248 | 55.076 | 0.3416 |
+| muon_tune/m_ns7 | 34.2419 | 0.9256 | 55.270 | 0.3456 |
+| muon_tune/m_aux3e4 | 34.2188 | 0.9252 | 55.167 | 0.3451 |
+| muon_tune/m_wd1e2 | 34.2135 | 0.9250 | 55.129 | 0.3451 |
+| muon_mech/p_shift4 (2e-3,handicap) | 34.2845 | 0.9276 | 55.898 | 0.3523 |
+| muon_mech/p_aniso (2e-3) | 34.2656 | 0.9274 | 55.903 | 0.3524 |
+| muon_mech/p_dtcwt (2e-3) | 34.1587 | 0.9253 | 55.843 | 0.3454 |
+| muon_mech/p_lv3shift (2e-3) | 34.3001 | 0.9271 | 55.732 | 0.3509 |
+| muon_mech/z_dual (2e-3) | 33.8451 | 0.9214 | 53.911 | 0.3338 |
+| muon_mech/z_dual_shift4 (2e-3) | 33.8555 | 0.9207 | 53.731 | 0.3332 |
+| muon_mech/z_dual_dtcwt (2e-3) | 33.1622 | 0.9105 | 51.344 | 0.3252 |
+| muon_mech/n3muon/ft (2e-3) | 34.2428 | 0.9275 | 55.896 | 0.3531 |
+| mech_best/p_shift4 (5e-3) | 34.3096 | 0.9277 | **56.022** | **0.3534** |
+| mech_best/p_shift4 +TTA | 34.4063 | 0.9285 | 55.960 | 0.3534 |
+| mech_best/p_aniso (5e-3) | 34.3099 | 0.9277 | 55.921 | 0.3532 |
+| mech_best/p_aniso +TTA | 34.4074 | 0.9285 | 55.862 | 0.3531 |
+| mech_best/p_dtcwt (5e-3) | 34.1541 | 0.9251 | 55.951 | 0.3457 |
+| mech_best/n3_ft (5e-3) | 34.2764 | 0.9279 | 55.570 | 0.3514 |
+| mech_best/n3_ft +TTA | 34.3882 | 0.9288 | 55.497 | 0.3514 |
+
+### A.7 ×3 / ×4 迁移（scale-adaptive λ，零预训练 AdamW）
+| run | Y | SSIM | MUSIQ | MANIQA |
+|---|---|---|---|---|
+| scale_3/s1_b64_plain | 31.0383 | 0.8687 | 51.786 | 0.3239 |
+| scale_3/s1_b64_dwt1 | 31.0601 | 0.8671 | 49.751 | 0.3121 |
+| scale_3/s1_b64_dwt2 | 31.1300 | 0.8709 | 52.041 | 0.3320 |
+| scale_3/s1_b64_dwt5 | 31.1164 | 0.8686 | 50.478 | 0.3196 |
+| scale_4/s1_b64_plain | 29.4156 | 0.8295 | 47.146 | 0.2993 |
+| scale_4/s1_b64_dwt5 | 29.5106 | 0.8322 | 48.249 | 0.3131 |
+
+### A.8 频域 rectified flow（方向C，判负；OOM 后 n=62）
+| run | Y | SSIM | MUSIQ | MANIQA |
+|---|---|---|---|---|
+| hf_flow/refine_s0.10 | 31.0746 | 0.7622 | 47.579 | 0.2308 |
+| hf_flow/refine_s0.20 | 27.1776 | 0.5414 | 41.378 | 0.2409 |
+| hf_flow/refine_s0.35 | 23.1929 | 0.3482 | 36.054 | 0.2545 |
+| muon_mech/n3muon/pretrain *(OOD，非有效)* | 22.3039 | 0.7604 | 60.876 | 0.4691 |
+
+---
+
+# 附录 B — 实验根目录清单（含无 eval 的中止/探针根，供审计）
+
+**有官方 eval（见附录 A）**：`iqa_eval`、`pixel_reg`、`pixel_reg_XS`、`pixel_flow`、`latent_flow_flux(_XS)`、`latent_flow_res`、`latent_reg_flux`、`s1_sweep`、`s1_pretrain_b64`、`b64_ft15k`、`capacity`、`shape_sweep`、`mamba_matrix`、`plan12`、`new_arms`、`wave_arms`、`wave_unet`、`stack_dwt`、`muon_ab`、`muon_tune`、`muon_mech`、`mech_best`、`scale_3`、`scale_4`、`hf_flow`。
+
+**目录存在但无 eval.json（中止 / 无官方评估 / 探针）**：
+| 根 | 说明 |
+|---|---|
+| `ablation_x2/A0_l1_only`、`improve/E11_align_loss`、`matrix_x2/E1,E2` | 阶段A SwinIR 线（结果经 `iqa_eval/` 权威重打分，见 §1） |
+| `pretrain/pt_pixel_reg`、`s1_pretrain` | 预训练中间产物（无独立 Test 评估） |
+| `unet_reg`、`unet_1128`、`unet_s1_1244` | 早期 U-Net 容量/形状预研，未单列官方评估 |
+| `latent_flow_sd`、`latent_reg_flux_lr3e5`、`v1_latent_flow_flux_14k` | 扩散被砍臂/早期变体（flux 底噪证伪后砍，见 §0/矩阵） |
+| `mamba` | Mamba 早期单跑（正式在 `mamba_matrix`） |
+| `vae_noise` | VAE 重建底噪表（非 SR 评估，产物格式不同） |
+| `dbg2` | 调试残留 |
+| `n3`、`honest_deep`、`sweep48` | **被主动中止的链**（用户令停止/重排），无产物 |
+| `smoke_*`（smoke_hf/mamba/mamba_probe/muonadv/muon_srv/new_arms） | smoke 探针产物，非结果 |
+
+---
+
+# 附录 C — 驱动 / 日志索引
+
+**顶层 campaign 日志（`experiments/*.log`，每条=一次链式 campaign）**：
+`wave_arms`、`wave_unet`、`stack_dwt`、`stack_sweep`/`stack_sweep2`、`sweep48`、`wave_sweep`、`freq2`、`mamba_matrix`、`mamba_speed`、`mm_fill`、`muon_ab`、`muon_sweep`、`muon_first`、`champ_muon`、`mech_best`、`hf_flow`、`honest48`、`honest_deep`、`next_phase`/`next_phase2`、`wavedriver`、`reeval`、`tta_best`、`capacity`/`capacity_ffn`、`shape_sweep`、`chain_after`/`chain_b40`/`chain_b64`/`chain_pretrain`、`cut_vae`、`iqa_evals`、`swinir_iqa`/`swinir_iqa_fast`、`precache_hr`/`precache_hr2`。
+**逐臂训练/评估日志**：`experiments/diffusion/logs/`（共 222 个 `.log`，前缀 `na_/wa_/wu_/mm_/sd_/sc_/mu_/mf_/mb_/tb_/hn_/s48_/fq_/hd_/hf_/sc_` 对应各 campaign 的每一臂 train/eval）。
+
+> 说明：所有 campaign 均走 `scripts/server/run_*.sh`（tmux 会话 + 逐臂 `wait_gpu` + `eval.json` 幂等跳过），支持断点续跑；本轮多次因用户重排指令用 `tmux kill-session` 中止并在改配后重启，历史产物保留于各自根目录。
+
