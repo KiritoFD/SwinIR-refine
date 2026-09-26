@@ -1,5 +1,7 @@
 # Baseline catalogue — Real-World SISR on RealSR (2021–2026)
 
+> 五年顶会超分方法**全景计数 + 复现/引用决策**见 [`SURVEY.md`](SURVEY.md)：共 >40 个方法，真正需复现的仅 **~8 个判别式架构基线**（本目录流水线），其余 ~30 个按协议标签引用。
+
 Purpose: place our model against **representative baselines of the last five years** on
 RealSR, with every number traceable to a **source** and an explicit **protocol** tag.
 Status legend: **[ours]** = reproduced/measured in this repo under our strict protocol;
