@@ -226,3 +226,95 @@ def build_rrdb(size="S", **kw):
     if not kw.get("nf"):
         kw["nf"] = preset.get(str(size).upper(), 64)
     return RRDBNet(**kw)
+
+
+# --------------------------------------------------------------- SRCNN / VDSR / RDN
+
+
+class SRCNN(nn.Module):
+    """Classic 3-layer CNN (pre-upsampling variant: input is the bicubic HR, net
+    predicts the HR image; we return net(x)-x so the harness's +bicubic reconstructs it)."""
+
+    def __init__(self, input_size=128, in_channels=3, out_channels=3, nf=64, scale=2,
+                 coord_channels=0, use_checkpoint=False, **_u):
+        super().__init__()
+        self.head = nn.Conv2d(3, nf, 9, padding=4)
+        self.net = nn.Sequential(
+            self.head, nn.ReLU(True), nn.Conv2d(nf, nf, 5, padding=2), nn.ReLU(True),
+            nn.Conv2d(nf, 3, 5, padding=2))
+        self.align = 1
+
+    def forward(self, x, t=None):
+        return self.net(x) - x
+
+
+class VDSR(nn.Module):
+    """Very Deep SR (20 conv) with global residual — natively a residual predictor,
+    matches the harness (pred = bicubic + net) exactly."""
+
+    def __init__(self, input_size=128, in_channels=3, out_channels=3, nf=64, n_res=18,
+                 scale=2, coord_channels=0, use_checkpoint=False, **_u):
+        super().__init__()
+        self.head = nn.Conv2d(3, nf, 3, padding=1)
+        layers = []
+        for _ in range(n_res):
+            layers += [nn.Conv2d(nf, nf, 3, padding=1), nn.ReLU(True)]
+        self.body = nn.Sequential(*layers)
+        self.tail = nn.Conv2d(nf, 3, 3, padding=1)
+        self.align = 1
+
+    def forward(self, x, t=None):
+        return self.tail(self.body(self.head(x)))
+
+
+class RDB(nn.Module):
+    def __init__(self, nf=16, gc=8, n_layers=5):
+        super().__init__()
+        self.convs = nn.ModuleList([nn.Conv2d(nf + i * gc, gc, 3, padding=1) for i in range(n_layers)])
+        self.lff = nn.Conv2d(nf + n_layers * gc, nf, 1)
+        self.act = nn.ReLU(True)
+
+    def forward(self, x):
+        feats = [x]
+        for c in self.convs:
+            feats.append(self.act(c(torch.cat(feats, 1))))
+        return self.lff(torch.cat(feats, 1)) + x
+
+
+class RDN(nn.Module):
+    """Residual Dense Network (pre-upsampling residual variant)."""
+
+    def __init__(self, input_size=128, in_channels=3, out_channels=3, nf=16, gc=8,
+                 n_blocks=4, n_layers=5, scale=2, coord_channels=0, use_checkpoint=False, **_u):
+        super().__init__()
+        self.head = nn.Conv2d(3, nf, 3, padding=1)
+        self.body = nn.ModuleList([RDB(nf, gc, n_layers) for _ in range(n_blocks)])
+        self.global_lff = nn.Conv2d(nf * (n_blocks + 1), nf, 1)
+        self.tail = nn.Conv2d(nf, 3, 3, padding=1)
+        self.align = 1
+
+    def forward(self, x, t=None):
+        x0 = self.head(x)
+        feats = [x0]
+        h = x0
+        for blk in self.body:
+            h = blk(h)
+            feats.append(h)
+        out = self.global_lff(torch.cat(feats, 1))
+        return self.tail(out)
+
+
+def build_srcnn(size="S", **kw):
+    kw.pop("patch_size", None)
+    return SRCNN(**kw)
+
+
+def build_vdsr(size="S", **kw):
+    kw.pop("patch_size", None)
+    return VDSR(**kw)
+
+
+def build_rdn(size="S", **kw):
+    kw.pop("patch_size", None)
+    kw.setdefault("nf", 16); kw.setdefault("gc", 8)
+    return RDN(**kw)

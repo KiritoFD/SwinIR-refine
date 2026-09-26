@@ -31,7 +31,8 @@ from .data import default_root
 from .dit import build_dit
 from .unet import build_unet
 from .unet import build_wavelet_dual
-from .baselines_sr import build_edsr, build_rcan, build_srresnet, build_rrdb
+from .baselines_sr import (build_edsr, build_rcan, build_srresnet, build_rrdb,
+                           build_srcnn, build_vdsr, build_rdn)
 from .flow import sample_flow
 from .hf_flow import build_hf_head, hf_refine
 from .iqa import IQAScorer
@@ -429,8 +430,9 @@ def main():
     use_coord = bool(targs.get("coord", False)) and mode == "pixel"
     if use_coord and objective == "flow":
         raise SystemExit("this ckpt was trained with --coord, which is reg-only")
-    if backbone in ("edsr", "rcan", "srresnet", "rrdb"):
-        _bmap = {"edsr": build_edsr, "rcan": build_rcan, "srresnet": build_srresnet, "rrdb": build_rrdb}
+    if backbone in ("edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn"):
+        _bmap = {"edsr": build_edsr, "rcan": build_rcan, "srresnet": build_srresnet,
+                 "rrdb": build_rrdb, "srcnn": build_srcnn, "vdsr": build_vdsr, "rdn": build_rdn}
         model = _bmap[backbone](size, input_size=input_size, in_channels=in_ch,
                                 nf=int(targs.get("base", 0) or 0) or None,
                                 scale=int(targs.get("scale", 2))).to(device)

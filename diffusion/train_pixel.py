@@ -53,10 +53,10 @@ def parse_args():
     p.add_argument("--data-root", default="", help="auto-detected if empty")
     p.add_argument("--out", default=r"G:\RealSR\experiments\diffusion\pixel_dit")
     p.add_argument("--objective", default="flow", choices=["flow", "reg"])
-    p.add_argument("--backbone", default="dit", choices=["dit", "unet", "mamba", "edsr", "rcan", "srresnet", "rrdb"],
+    p.add_argument("--backbone", default="dit", choices=["dit", "unet", "mamba", "edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn"],
                    help="dit = token transformer; unet = conv encoder/decoder with skips; "
-                        "mamba = stride-1 VSS (2D selective scan), reg-only; edsr/rcan/srresnet/rrdb = "
-                        "classic SR baselines (pre-upsampling residual variants of the canonical archs)")
+                        "mamba = stride-1 VSS (2D selective scan), reg-only; edsr/rcan/srresnet/rrdb/" 
+                        "srcnn/vdsr/rdn = classic SR baselines (pre-upsampling residual variants of the canonical archs)")
     p.add_argument("--size", default="S", choices=["XS", "S", "M", "B"])
     p.add_argument("--patch", type=int, default=2)
     # U-Net only (ignored by the DiT path)
@@ -156,6 +156,17 @@ def parse_args():
                    help="lr for the aux (bias/norm) AdamW inside the muon composite; 0 = same "
                         "as --muon-lr. Decoupling them lets the 1-D params train at a different "
                         "rate than the orthogonalised matrices.")
+    p.add_argument("--lpips-weight", type=float, default=0.0,
+                   help="perceptual (LPIPS) loss weight added to the reg objective; >0 tunes "
+                        "toward no-reference perceptual quality (MUSIQ/MANIQA) at some PSNR/SSIM "
+                        "cost. Uses pyiqa lpips as a differentiable loss (perceptual variants only).")
+    p.add_argument("--nr-loss", default="", choices=["", "musiq", "maniqa"],
+                   help="maximize a cached no-reference IQA metric as a differentiable loss "
+                        "(pyiqa as_loss); produces MUSIQ/MANIQA-strong variants at some "
+                        "SSIM/PSNR cost. Requires --nr-weight > 0.")
+    p.add_argument("--nr-weight", type=float, default=0.0,
+                   help="coefficient on the --nr-loss term (MUSIQ ~50 scale -> use ~0.01-0.05; "
+                        "MANIQA ~0.3 scale -> use ~0.5-3).")
     p.add_argument("--overfit-test", action="store_true",
                    help="ORACLE ceiling probe: TRAIN ON THE Test split (all 100 pairs, "
                         "random crops) with pure L1 and no early stop.  Measures the "
@@ -443,13 +454,15 @@ def main():
     is_flow = args.objective == "flow"
     in_ch = 6 if is_flow else 3
     kw = {"input_size": hr_px, "patch_size": args.patch, "in_channels": in_ch, "use_checkpoint": args.grad_ckpt}
-    if args.backbone in ("edsr", "rcan", "srresnet", "rrdb"):
+    if args.backbone in ("edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn"):
         kw.pop("patch_size", None)
         kw["scale"] = int(args.scale)
         if args.base:
             kw["nf"] = int(args.base)
-        from .baselines_sr import build_edsr, build_rcan, build_srresnet, build_rrdb
-        _bmap = {"edsr": build_edsr, "rcan": build_rcan, "srresnet": build_srresnet, "rrdb": build_rrdb}
+        from .baselines_sr import (build_edsr, build_rcan, build_srresnet, build_rrdb,
+                                   build_srcnn, build_vdsr, build_rdn)
+        _bmap = {"edsr": build_edsr, "rcan": build_rcan, "srresnet": build_srresnet,
+                 "rrdb": build_rrdb, "srcnn": build_srcnn, "vdsr": build_vdsr, "rdn": build_rdn}
         model = _bmap[args.backbone](args.size, **kw).to(device)
         nparam = sum(p.numel() for p in model.parameters()) / 1e6
         print(f"  {args.backbone.upper()} nf={model.head.out_channels if hasattr(model.head,'out_channels') else '-'} "
@@ -515,7 +528,8 @@ def main():
         model = build_dit(args.size, **kw).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     _name = {"unet": "PixelUNet", "dit": "PixelDiT", "mamba": "MambaSR",
-             "edsr": "EDSR", "rcan": "RCAN", "srresnet": "SRResNet", "rrdb": "RRDB"}.get(args.backbone, args.backbone.upper())
+             "edsr": "EDSR", "rcan": "RCAN", "srresnet": "SRResNet", "rrdb": "RRDB",
+             "srcnn": "SRCNN", "vdsr": "VDSR", "rdn": "RDN"}.get(args.backbone, args.backbone.upper())
     print(
         f"{_name}-{args.size} {n_params:.2f}M  "
         f"backbone={args.backbone} objective={args.objective}  HR={hr_px} "
@@ -598,6 +612,8 @@ def main():
 
     amp_dtype = torch.bfloat16 if args.amp else torch.float32
     t_zeros = torch.zeros(1, device=device)
+    _perc: dict = {}   # lazy holder for the pyiqa LPIPS loss module (see forward_loss)
+    _nr: dict = {}     # lazy holder for the pyiqa no-reference IQA metric used as a loss
 
     def forward_loss(inp, lr_up, hr):
         if is_flow:
@@ -623,6 +639,19 @@ def main():
                     base = base + args.dwt_weight * dwt_hf_loss_shift(pred, hr, n_shift=args.dwt_shift, **common)
                 else:
                     base = base + args.dwt_weight * dwt_highfreq_loss(pred, hr, **common)
+        if args.lpips_weight > 0:
+            if "m" not in _perc:
+                import pyiqa
+                _perc["m"] = pyiqa.create_metric("lpips", device=device, as_loss=True)
+                print("  perceptual loss: pyiqa LPIPS enabled", flush=True)
+            base = base + args.lpips_weight * _perc["m"](pred.float(), hr.float())
+        if args.nr_loss and args.nr_weight > 0:
+            if "m" not in _nr:
+                import pyiqa
+                _nr["m"] = pyiqa.create_metric(args.nr_loss, device=device, as_loss=True)
+                print(f"  NR-IQA loss: maximize {args.nr_loss} x{args.nr_weight}", flush=True)
+            # metric higher-is-better => subtract to maximize it during descent
+            base = base - args.nr_weight * _nr["m"](pred.float())
         return base, pred
 
     t0 = time.time()
