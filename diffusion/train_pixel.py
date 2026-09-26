@@ -155,6 +155,13 @@ def parse_args():
                    help="lr for the aux (bias/norm) AdamW inside the muon composite; 0 = same "
                         "as --muon-lr. Decoupling them lets the 1-D params train at a different "
                         "rate than the orthogonalised matrices.")
+    p.add_argument("--overfit-test", action="store_true",
+                   help="ORACLE ceiling probe: TRAIN ON THE Test split (all 100 pairs, "
+                        "random crops) with pure L1 and no early stop.  Measures the "
+                        "best Y any model can reach when it has memorised the answers -- "
+                        "i.e. the dataset's representation + alignment + noise ceiling. "
+                        "LEAKS the test set by design; a diagnostic, never a reported "
+                        "result. Pair with --patience 999999 --min-steps 0 and NO --dwt-loss.")
     p.add_argument("--t-sampler", default="logit_normal")
     p.add_argument("--ema", type=float, default=0.999)
     p.add_argument("--compile", action="store_true", help="torch.compile the training step")
@@ -365,8 +372,11 @@ def main():
     (out / "args.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
 
     dm = args.decoded_manifest or None
-    _real = RealSRCropDataset(args.data_root, "Train", ("Canon", "Nikon"), args.scale, args.lr_patch, True,
+    _real = RealSRCropDataset(args.data_root, "Test" if args.overfit_test else "Train",
+                              ("Canon", "Nikon"), args.scale, args.lr_patch, True,
                               cache=bool(args.cache_data), decoded_manifest=dm, coord=args.coord)
+    if args.overfit_test:
+        _real.augment = True  # random crops + flips so every step sees the whole frame
     adv = None
     if args.pretrain_root:
         # train on BSRGAN-degraded DIV2K/Flickr2K, but KEEP the RealSR val split
@@ -401,7 +411,13 @@ def main():
               f"val {0 if val_ds is None else len(val_ds)} from "
               f"{args.pretrain_val_root or 'RealSR split (NOT recommended)'}", flush=True)
     else:
-        ds, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
+        if args.overfit_test:
+            ds, val_ds = _real, _real  # val == train (leaked); patience set huge so no early stop
+            print(f"  *** OVERFIT-TEST ORACLE: training on all {len(_real)} Test pairs, "
+                  f"pure L1, no early stop.  Leakage by design -- ceiling probe only ***",
+                  flush=True)
+        else:
+            ds, val_ds = make_split(_real, args.val_pairs, seed=args.seed)
     # RealSR Train has only 390 usable pairs.  With batch >= len(ds) an epoch
     # yields zero (drop_last) or one full batch, and the loop would rebuild the
     # worker pool on almost every step.  Draw several batches per epoch with
