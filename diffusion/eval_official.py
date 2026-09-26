@@ -31,6 +31,7 @@ from .data import default_root
 from .dit import build_dit
 from .unet import build_unet
 from .unet import build_wavelet_dual
+from .baselines_sr import build_edsr, build_rcan
 from .flow import sample_flow
 from .hf_flow import build_hf_head, hf_refine
 from .iqa import IQAScorer
@@ -428,7 +429,12 @@ def main():
     use_coord = bool(targs.get("coord", False)) and mode == "pixel"
     if use_coord and objective == "flow":
         raise SystemExit("this ckpt was trained with --coord, which is reg-only")
-    if backbone == "unet":
+    if backbone in ("edsr", "rcan"):
+        _f = build_edsr if backbone == "edsr" else build_rcan
+        model = _f(size, input_size=input_size, in_channels=in_ch,
+                   nf=int(targs.get("base", 0) or 0) or None,
+                   scale=int(targs.get("scale", 2))).to(device)
+    elif backbone == "unet":
         # native_lr was -1 (auto) unless explicitly set; mirror train_pixel's rule
         ns = int(targs.get("native_lr", -1))
         if ns < 0:
