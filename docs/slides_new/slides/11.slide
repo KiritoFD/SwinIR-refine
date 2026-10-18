@@ -1,0 +1,103 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 26, left: 70, right: 70, flexDirection: 'column', gap: 4 }}>
+    <Text style={{ fontSize: 13, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>02 分析 · 性能上限实测</Text>
+    <Text style={{ fontSize: 28, color: '#0E3F8C', fontWeight: 'bold' }}>误差中不可消除的三部分，以及由此确定的上限</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568' }}>无需训练任何模型：对 100 张真值直接做信号分析即可测得</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 100, left: 70, right: 70, height: 72, background: '#0E3F8C', borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 22, padding: 13 }}>
+    <Math latex='\mathrm{MSE}_{\mathrm{total}} \;=\; E_{\mathrm{align}} \;+\; E_{\mathrm{null}} \;+\; E_{\mathrm{noise}}' width={540} display={true} color='#FFFFFF' />
+    <Box style={{ flexDirection: 'row', gap: 8 }}>
+      <Box style={{ background: 'rgba(255,255,255,0.14)', padding: 5, borderRadius: 3 }}><Text style={{ fontSize: 12, color: '#FFFFFF' }}>配准残差</Text></Box>
+      <Box style={{ background: 'rgba(255,255,255,0.14)', padding: 5, borderRadius: 3 }}><Text style={{ fontSize: 12, color: '#FFFFFF' }}>带宽损失</Text></Box>
+      <Box style={{ background: 'rgba(255,255,255,0.14)', padding: 5, borderRadius: 3 }}><Text style={{ fontSize: 12, color: '#FFFFFF' }}>传感器噪声</Text></Box>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 188, left: 70, width: 660, height: 348, background: '#F7F9FC', border: '1px solid #D6DCE5', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 7 }}>
+    <Text style={{ fontSize: 14, color: '#0E3F8C', fontWeight: 'bold' }}>三项误差分别折算为 PSNR 上限（dB，数值越高表示该项限制越弱）</Text>
+    <Table
+      style={{ width: '100%', height: 286 }}
+      defaultTextStyle={{ fontSize: 12, textAlign: 'center', color: '#1A2230' }}
+      defaultCellStyle={{ border: { left: { width: 1, color: '#D6DCE5' }, right: { width: 1, color: '#D6DCE5' }, top: { width: 1, color: '#D6DCE5' }, bottom: { width: 1, color: '#D6DCE5' } }, padding: 4 }}
+      cells={[
+        [
+          { text: '误差来源', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '测量方式', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '×2', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '×3', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '×4', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+        ],
+        [
+          { text: '带宽损失 E_null', textStyle: { fontSize: 12.5, textAlign: 'left', bold: true } },
+          { text: '理想低通后重测', textStyle: { fontSize: 12, textAlign: 'left' } },
+          { text: '40.65', textStyle: { bold: true } },
+          { text: '34.55' },
+          { text: '31.27' },
+        ],
+        [
+          { text: '传感器噪声 E_noise', textStyle: { fontSize: 12.5, textAlign: 'left', bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '小波系数中位数 σ̂≈0.90', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '49.05', textStyle: { bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '49.05', cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '49.05', cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: '前两项合成', textStyle: { fontSize: 12.5, textAlign: 'left', bold: true } },
+          { text: '带宽叠加噪声', textStyle: { fontSize: 12, textAlign: 'left' } },
+          { text: '40.1', textStyle: { bold: true, color: '#0E3F8C' } },
+          { text: '34.4' },
+          { text: '31.2' },
+        ],
+        [
+          { text: '再叠加 0.3 px 配准残差 E_align', textStyle: { fontSize: 12.5, textAlign: 'left', bold: true, color: '#D9534F' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '亚像素平移后重测', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '35.7', textStyle: { bold: true, color: '#D9534F' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '约 32', cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '约 29.5', cellStyle: { background: { color: '#FFF4E6' } } },
+        ],
+        [
+          { text: '配准更差：0.5 px', textStyle: { fontSize: 12.5, textAlign: 'left', bold: true } },
+          { text: '同上', textStyle: { fontSize: 12, textAlign: 'left' } },
+          { text: '33.4', textStyle: { bold: true, color: '#D9534F' } },
+          { text: '—' },
+          { text: '—' },
+        ],
+        [
+          { text: '本文实测', textStyle: { fontSize: 12.5, textAlign: 'left', bold: true }, cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '本协议 100 对', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '34.41', textStyle: { bold: true, color: '#0E3F8C', fontSize: 12 }, cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '31.13', cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '29.51', cellStyle: { background: { color: '#F0F5FC' } } },
+        ],
+      ]}
+    />
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 188, right: 70, width: 470, flexDirection: 'column', gap: 10 }}>
+    <Box style={{ background: '#FFFFFF', border: '2px solid #D9534F', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 5 }}>
+      <Text style={{ fontSize: 13, color: '#D9534F', fontWeight: 'bold' }}>主要限制项 · ×2</Text>
+      <Text style={{ fontSize: 14, color: '#1A2230', fontWeight: 'bold' }}>配准残差，而非带宽或噪声</Text>
+      <Text style={{ fontSize: 12.5, color: '#4A5568' }}>噪声对应上限为 49.05 dB，远高于带宽项 40.65 dB，说明噪声几乎不构成限制。配准残差把上限从 40.1 dB 压低到 35.7 dB。</Text>
+    </Box>
+
+    <Box style={{ background: '#F0F5FC', border: '1px solid #C7D9F2', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 5 }}>
+      <Text style={{ fontSize: 13, color: '#0E3F8C', fontWeight: 'bold' }}>×2 可达区间</Text>
+      <Text style={{ fontSize: 30, color: '#0E3F8C', fontWeight: 'bold' }}>34.4 – 35.7 dB</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>本文的 34.41 dB 位于该区间内，剩余误差主要来自上述物理因素。</Text>
+    </Box>
+
+    <Box style={{ background: '#FFFFFF', border: '1px solid #D6DCE5', borderTop: '3px solid #FFC107', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 4 }}>
+      <Text style={{ fontSize: 13, color: '#0E3F8C', fontWeight: 'bold' }}>×3 与 ×4 情况不同</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230' }}>×3 实测 31.13 dB，上限约 34.4 dB，相差约 3 dB，仍有提升空间。</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230' }}>×4 实测 29.51 dB，上限 31.2 dB，已接近上限。</Text>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 22, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 11 }}>
+    <Text style={{ fontSize: 12.5, color: '#8B97A8' }}>测量实现：diffusion/oracle.py · 不含任何训练模型 · 直接对 100 张真值做信号分析</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>04 / 13</Text>
+  </Box>
+</Slide>

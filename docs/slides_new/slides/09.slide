@@ -1,0 +1,111 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 18, left: 56, right: 56, flexDirection: 'column', gap: 3 }}>
+    <Text style={{ fontSize: 12.5, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>04 实验 · 表二 · 与基线对比</Text>
+    <Text style={{ fontSize: 23, color: '#0E3F8C', fontWeight: 'bold' }}>官方阶梯：8 个基线的官方原码，在同一配方与同一评估协议下重训（7 / 8 臂已完成）</Text>
+    <Text style={{ fontSize: 11.5, color: '#4A5568' }}>A-strict：limited-range Y / uint8 / modcrop4 / 不剃边 / 100 对 / tile 64 · pad 16；统一配方 AdamW 1e-4 + L1 + EMA，样本上限 1.28M。表中数字均为 D4 × 8 自集成口径。</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 92, left: 56, right: 56, height: 578, background: '#F7F9FC', border: '1px solid #D6DCE5', borderRadius: 4, padding: 6, flexDirection: 'column' }}>
+    <Table
+      style={{ width: '100%', height: 566 }}
+      defaultTextStyle={{ fontSize: 12.5, textAlign: 'center', color: '#1A2230' }}
+      defaultCellStyle={{ border: { left: { width: 1, color: '#D6DCE5' }, right: { width: 1, color: '#D6DCE5' }, top: { width: 1, color: '#D6DCE5' }, bottom: { width: 1, color: '#D6DCE5' } }, padding: 5 }}
+      cells={[
+        [
+          { text: '臂（官方原码 · 实测参数）', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5, textAlign: 'left' }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'batch × steps · 实际样本', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'PSNR-Y', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'SSIM', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'MUSIQ', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'MANIQA', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12.5 }, cellStyle: { background: { color: '#0E3F8C' } } },
+        ],
+        [
+          { text: 'Bicubic（下限参照）', textStyle: { fontSize: 12.5, textAlign: 'left', color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '—', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '31.7335', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.8876', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '39.40', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.2782', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'EDSR-baseline（16RB×64F）1.37M', textStyle: { fontSize: 12.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '32×40k · 1.28M', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '33.5300', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.91549', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '51.49', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.32231', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'HAT-L（RHAG12 · d180 · w16）40.70M', textStyle: { fontSize: 12.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '4×320k · 0.20M 早停', textStyle: { fontSize: 12, color: '#B45309' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '33.5931', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.91725', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '51.92', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.32361', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'VDSR（20 层 C64 · HR 输入）0.59M', textStyle: { fontSize: 12.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '32×40k · 1.28M', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '33.6780', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.91755', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '52.85', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.31992', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'RCAN（G10 / R20 / F64）15.44M', textStyle: { fontSize: 12.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '64×20k · 1.28M', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '33.8488', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.92081', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '53.95', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.33449', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'RDN-B（D16 / C8 / G64）22.12M', textStyle: { fontSize: 12.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '32×40k · 1.28M', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '33.9810', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.92266', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '54.74', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.34090', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'SwinIR-L classical（6×6 · d180 · w8）11.75M', textStyle: { fontSize: 12.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '8×160k · 1.06M', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '34.0241', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.92298', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '54.57', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.33873', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'unet_ctrl（本文骨干 · 基线配方）18.67M', textStyle: { fontSize: 12.5, textAlign: 'left' }, cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '128×10k · 1.28M', textStyle: { fontSize: 12.5 }, cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '34.1664', textStyle: { fontSize: 12.5, bold: true }, cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '0.92525', textStyle: { fontSize: 12.5, bold: true }, cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '54.91', textStyle: { fontSize: 12.5, bold: true }, cellStyle: { background: { color: '#F0F5FC' } } },
+          { text: '0.34147', textStyle: { fontSize: 12.5, bold: true }, cellStyle: { background: { color: '#F0F5FC' } } },
+        ],
+        [
+          { text: 'SRFormer（d180 · w24）10.40M', textStyle: { fontSize: 12.5, textAlign: 'left', color: '#94A3B8' }, cellStyle: { background: { color: '#F7F9FC' } } },
+          { text: '16×80k · 训练中', textStyle: { fontSize: 12.5, color: '#94A3B8' }, cellStyle: { background: { color: '#F7F9FC' } } },
+          { text: '待评估', textStyle: { fontSize: 12.5, color: '#94A3B8' }, cellStyle: { background: { color: '#F7F9FC' } } },
+          { text: '—', textStyle: { fontSize: 12.5, color: '#94A3B8' }, cellStyle: { background: { color: '#F7F9FC' } } },
+          { text: '—', textStyle: { fontSize: 12.5, color: '#94A3B8' }, cellStyle: { background: { color: '#F7F9FC' } } },
+          { text: '预计 10-03', textStyle: { fontSize: 12.5, color: '#94A3B8' }, cellStyle: { background: { color: '#F7F9FC' } } },
+        ],
+        [
+          { text: 'Ours 交付（+ 预训练 + Muon + λ8 + 移位）18.67M', textStyle: { fontSize: 12.5, textAlign: 'left', bold: true, color: '#FFFFFF' }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '128×10k + 3.2M 预训练', textStyle: { fontSize: 12, color: '#FFFFFF' }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '34.4063', textStyle: { fontSize: 12.5, bold: true, color: '#FFC107' }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '0.9285', textStyle: { fontSize: 12.5, bold: true, color: '#FFC107' }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '55.96', textStyle: { fontSize: 12.5, bold: true, color: '#FFC107' }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '0.3534', textStyle: { fontSize: 12.5, bold: true, color: '#FFC107' }, cellStyle: { background: { color: '#0E3F8C' } } },
+        ],
+      ]}
+    />
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 14, left: 56, right: 56, flexDirection: 'row', justifyContent: 'flex-end' }}>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>12 / 13</Text>
+  </Box>
+</Slide>

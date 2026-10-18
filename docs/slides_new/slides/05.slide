@@ -1,0 +1,61 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 30, left: 70, right: 70, flexDirection: 'column', gap: 5 }}>
+    <Text style={{ fontSize: 13, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>02 理论 · 超分问题的数学形式</Text>
+    <Text style={{ fontSize: 29, color: '#0E3F8C', fontWeight: 'bold' }}>超分是一个病态逆问题：解不唯一，且高频信息已被破坏</Text>
+    <Text style={{ fontSize: 13, color: '#4A5568' }}>本页给出问题的数学刻画，以及由此得到的三个基本结论</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 118, left: 70, right: 70, height: 70, background: '#0E3F8C', borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 24, padding: 14 }}>
+    <Math latex='y_{\mathrm{LR}} \;=\; \mathcal{D}\big(x_{\mathrm{HR}}\big) \;=\; (\,x_{\mathrm{HR}} * k\,)\!\downarrow_{s} \;+\; n' width={560} display={true} color='#FFFFFF' />
+    <Text style={{ fontSize: 13, color: '#D9E6F7' }}>退化算子 D 由模糊核 k、下采样倍率 s、噪声 n 组成</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 204, left: 70, width: 660, height: 330, background: '#F7F9FC', border: '1px solid #D6DCE5', borderRadius: 4, padding: 15, flexDirection: 'column', gap: 9 }}>
+    <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>一、解不唯一：一个 LR 对应无穷多个 HR</Text>
+    <Text style={{ fontSize: 12, color: '#1A2230' }}>下采样是多对一映射。凡被该过程滤除的分量（记其零空间为 N(D)），都能任意叠加到 x 上而不改变 y：</Text>
+
+    <Box style={{ background: '#FFFFFF', padding: 10, borderLeft: '4px solid #0E3F8C', borderRadius: 3 }}>
+      <Math latex='\mathcal{D}(x + \delta) = \mathcal{D}(x), \qquad \forall \delta \in \mathcal{N}(\mathcal{D})' width={470} display={true} color='#0E3F8C' />
+    </Box>
+
+    <Text style={{ fontSize: 12, color: '#1A2230' }}>因此重建必须借助先验 P(x) 从无穷多解中选取一个，这是一个最大后验问题：</Text>
+
+    <Box style={{ background: '#FFFFFF', padding: 10, borderLeft: '4px solid #0E3F8C', borderRadius: 3 }}>
+      <Math latex='\hat{x} \;=\; \arg\max_{x} \; \log P(y \mid x) \;+\; \log P(x)' width={500} display={true} color='#0E3F8C' />
+    </Box>
+
+    <Text style={{ fontSize: 12, color: '#1A2230' }}>在真实超分中 P(x) 不由解析先验给出，而是由训练样本隐式学习。因此数据量直接决定先验质量，这也解释了后文生成式方法的性能受数据规模限制。</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 204, right: 70, width: 470, flexDirection: 'column', gap: 12 }}>
+
+    <Box style={{ background: '#FFFFFF', border: '1px solid #D6DCE5', borderLeft: '5px solid #D9534F', borderRadius: 4, padding: 14, flexDirection: 'column', gap: 6 }}>
+      <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>二、高频被物理性破坏</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>按采样定理，×s 下采样后输入只保留低于截止频率的成分，更高的频率无法由输入恢复，只能由先验推测。可恢复频带上界为：</Text>
+      <Box style={{ background: '#F0F5FC', padding: 9, borderRadius: 3, alignItems: 'center' }}>
+        <Math latex='f_{\text{rec}} \;\leq\; \frac{f_{s}}{2s}' width={160} display={true} color='#0E3F8C' />
+      </Box>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>这解释了放大倍率越高、PSNR 绝对值越低的现象。</Text>
+    </Box>
+
+    <Box style={{ background: '#FFFFFF', border: '1px solid #D6DCE5', borderLeft: '5px solid #FFC107', borderRadius: 4, padding: 14, flexDirection: 'column', gap: 6 }}>
+      <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>三、最优解是条件均值</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>若以均方误差为准则，最优估计为给定输入下的条件期望：</Text>
+      <Box style={{ alignItems: 'center' }}>
+        <Math latex='\hat{x}^{\star} \;=\; \mathbb{E}\,[\,x \mid y\,]' width={150} display={true} color='#0E3F8C' />
+      </Box>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>它是所有可能解的概率平均。平均会降低方差，使纹理与边缘对比度减弱 —— 这是以 PSNR 为目标的方法在视觉上偏平滑的数学原因。</Text>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 56, left: 70, right: 70, padding: 14, background: '#FFF4E6', borderLeft: '4px solid #FFC107', borderRadius: 4 }}>
+    <Text style={{ fontSize: 14, color: '#0E3F8C', fontWeight: 'bold' }}>由以上三点可知：提升 PSNR 与提升视觉锐度在数学上相互冲突（Blau &amp; Michaeli, CVPR 2018）。本文的做法是在保真度上做到接近上限，再单独讨论感知质量。</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 24, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 12 }}>
+    <Text style={{ fontSize: 12.5, color: '#8B97A8' }}>参考文献：Blau &amp; Michaeli, The Perception-Distortion Tradeoff, CVPR 2018</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>05 / 13</Text>
+  </Box>
+</Slide>

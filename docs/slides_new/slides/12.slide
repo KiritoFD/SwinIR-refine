@@ -1,0 +1,93 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#334155' }} />
+
+  <Box style={{ position: 'absolute', top: 14, left: 70, right: 70, flexDirection: 'column', gap: 2 }}>
+    <Text style={{ fontSize: 12, color: '#475569', letterSpacing: 4, fontWeight: 'bold' }}>04 硬件基础 · 形状决策</Text>
+    <Text style={{ fontSize: 23, color: '#1E293B', fontWeight: 'bold' }}>带宽不是瓶颈，形状才是：U-Net 的通道与边长由解析关系推出</Text>
+  </Box>
+
+  {/* 一、硬件存算比：把数摆清楚 */}
+  <Box style={{ position: 'absolute', top: 64, left: 70, right: 70, height: 256, flexDirection: 'column', gap: 6 }}>
+    <Text style={{ fontSize: 14, color: '#1E293B', fontWeight: 'bold' }}>一、硬件存算比是多少：RTX 4090 的分水岭在 164 FLOP/byte</Text>
+
+    <Box style={{ flexDirection: 'row', gap: 12, flex: 1 }}>
+      <Box style={{ flex: 1.12, background: '#F8FAFC', border: '1px solid #E2E8F0', borderLeft: '4px solid #334155', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 7 }}>
+        <Text style={{ fontSize: 13, color: '#334155', fontWeight: 'bold' }}>分水岭（Ridge point）的来历</Text>
+        <Text style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.5 }}>每读入一个字节能顺带完成的浮点运算数。芯片有临界值：低于它算力被访存拖住，高于它访存不再是限制。</Text>
+        <Box style={{ background: '#FFFFFF', borderRadius: 3, padding: 6, alignItems: 'center' }}>
+          <Math latex='I_{\star} \;=\; \frac{165\ \mathrm{TFLOPS}}{1008\ \mathrm{GB/s}} \;\approx\; 164\ \ \mathrm{FLOP/byte}' width={330} display={true} color='#334155' />
+        </Box>
+        <Text style={{ fontSize: 12.5, color: '#334155', lineHeight: 1.45 }}>分子为 4090 的 bf16 密集算力峰值，分母为显存带宽</Text>
+      </Box>
+
+      <Box style={{ flex: 1, background: '#FEF2F2', border: '1px solid #FCA5A5', borderLeft: '4px solid #DC2626', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 7 }}>
+        <Text style={{ fontSize: 13, color: '#B91C1C', fontWeight: 'bold' }}>DiT-S：1962 = 分水岭的 12 倍，根本不该被访存卡住</Text>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>每样本 1450 GFLOP 运算，对应 737 MB 激活，二者相除落在 <Text style={{ fontWeight: 'bold', color: '#B91C1C' }}>1962 FLOP/byte</Text>。远高于分水岭 164，说明它不受带宽限制，实测利用率 30.8%。</Text>
+        <Box style={{ background: '#FFFFFF', borderRadius: 3, padding: 7 }}>
+          <Text style={{ fontSize: 12.5, color: '#7F1D1D', lineHeight: 1.45 }}>但代价在别处：它把 <b>1604.6 GFLOP/图</b>（前向+反向）中 <b>64% 花在全分辨率的平方注意力</b>上，而超分是高度局部的任务。既然访存不是瓶颈，优化目标只能是减少 FLOPs。</Text>
+        </Box>
+      </Box>
+
+      <Box style={{ flex: 0.98, background: '#FFFFFF', border: '1px solid #E2E8F0', borderLeft: '4px solid #475569', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 7 }}>
+        <Text style={{ fontSize: 13, color: '#334155', fontWeight: 'bold' }}>所以我们这样决策</Text>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>把 FLOPs 从代价高、收益低的地方挪走：DiT 有 <Text style={{ fontWeight: 'bold', color: '#334155' }}>64% 的算力花在全分辨率的平方注意力上</Text>，换成 U-Net 后算力随分辨率逐级下降，每样本只需 <Text style={{ fontWeight: 'bold', color: '#334155' }}>47.23 GFLOP</Text>（前向）。</Text>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>同口径实测训练吞吐：<Text style={{ fontWeight: 'bold', color: '#334155' }}>U-Net 233 图/秒 vs DiT 31.7 图/秒 = 7.4 倍</Text>。</Text>
+      </Box>
+    </Box>
+  </Box>
+
+  {/* 二、形状由公式推出 */}
+  <Box style={{ position: 'absolute', top: 328, left: 70, right: 70, height: 340, flexDirection: 'column', gap: 6 }}>
+    <Text style={{ fontSize: 14, color: '#1E293B', fontWeight: 'bold' }}>二、U-Net 形状是算出来的：第 l 级边长 s_l、通道 c_l，逐级减半</Text>
+
+    <Box style={{ flexDirection: 'row', gap: 10, height: 116 }}>
+      <Box style={{ flex: 1, background: '#F8FAFC', border: '1px solid #E2E8F0', borderTop: '3px solid #475569', borderRadius: 4, padding: 8, flexDirection: 'column', gap: 3, alignItems: 'center' }}>
+        <Text style={{ fontSize: 12, color: '#334155', fontWeight: 'bold' }}>参数量：只随通道平方增长</Text>
+        <Math latex='P \;\propto\; \sum_{l} c_l^{2}' width={138} display={true} color='#334155' />
+        <Text style={{ fontSize: 12, color: '#64748B', textAlign: 'center' }}>3×3 卷积核只与通道数有关，与该级边长 s 无关</Text>
+      </Box>
+      <Box style={{ flex: 1, background: '#F8FAFC', border: '1px solid #E2E8F0', borderTop: '3px solid #0F766E', borderRadius: 4, padding: 8, flexDirection: 'column', gap: 3, alignItems: 'center' }}>
+        <Text style={{ fontSize: 12, color: '#115E59', fontWeight: 'bold' }}>计算量：通道与边长各乘一次方</Text>
+        <Math latex='F \;\propto\; \sum_{l} c_l^{2} s_l^{2}' width={148} display={true} color='#115E59' />
+        <Text style={{ fontSize: 12, color: '#64748B', textAlign: 'center' }}>每级有 s_l² 个像素，每个像素做 c_l² 次乘加</Text>
+      </Box>
+      <Box style={{ flex: 1, background: '#F8FAFC', border: '1px solid #E2E8F0', borderTop: '3px solid #EA580C', borderRadius: 4, padding: 8, flexDirection: 'column', gap: 3, alignItems: 'center' }}>
+        <Text style={{ fontSize: 12, color: '#C2410C', fontWeight: 'bold' }}>激活显存：通道只乘一次方</Text>
+        <Math latex='M \;\propto\; \sum_{l} c_l s_l^{2}' width={148} display={true} color='#C2410C' />
+        <Text style={{ fontSize: 12, color: '#64748B', textAlign: 'center' }}>反传需缓存每级特征图，容量是通道数乘像素数</Text>
+      </Box>
+    </Box>
+
+    <Box style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 4, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+      <Text style={{ fontSize: 12.5, color: '#9A3412', fontWeight: 'bold', width: 130 }}>令 c_l · s_l = 常数</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.45, flex: 1 }}>对比两式：<b>P 里通道是平方，F 里通道与边长同阶</b>。要让参数最省、算力不塌，就让通道加倍恰好抵掉边长减半，乘积恒定，于是每级算力均分。这就是 1:2:4:4 的来源，也是判据。</Text>
+      <Math latex='c_l \;\propto\; 1 / s_l' width={105} display={true} color='#EA580C' />
+    </Box>
+
+    <Box style={{ flexDirection: 'row', gap: 10, flex: 1 }}>
+      <Box style={{ flex: 1, background: '#FFFFFF', border: '1px solid #E2E8F0', borderLeft: '4px solid #94A3B8', borderRadius: 4, padding: 10, flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 12, color: '#475569', fontWeight: 'bold' }}>原形状 1128 = (1,1,2,8)</Text>
+        <Text style={{ fontSize: 12.5, color: '#64748B' }}>通道 64 / 64 / 128 / 512</Text>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.45 }}>边长最小的 16² 一级却塞进 512 通道，c·s 在 8192 与 4096 之间跳动，参数被最宽一级独占。</Text>
+        <Text style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.4 }}>参数 36.89M　FLOPs 9.42 G</Text>
+      </Box>
+      <Box style={{ flex: 1, background: '#F0FDFA', border: '1px solid #5EEAD4', borderLeft: '4px solid #0F766E', borderRadius: 4, padding: 10, flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 12, color: '#115E59', fontWeight: 'bold' }}>推出 1244 = (1,2,4,4)</Text>
+        <Text style={{ fontSize: 12.5, color: '#0F766E' }}>通道 64 / 128 / 256 / 256</Text>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.45 }}>前三级 c·s 恒等于 8192，每级算力各占 30.8%，参数减半而容量不丢。</Text>
+        <Text style={{ fontSize: 12.5, color: '#115E59', lineHeight: 1.4 }}>参数 18.67M　FLOPs 11.41 G</Text>
+      </Box>
+      <Box style={{ flex: 1.06, background: '#FFFFFF', border: '1px solid #E2E8F0', borderLeft: '4px solid #F59E0B', borderRadius: 4, padding: 10, flexDirection: 'column', gap: 4 }}>
+        <Text style={{ fontSize: 12, color: '#B45309', fontWeight: 'bold' }}>通道数换表达力，但会饱和</Text>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.45 }}>通道越宽，每级能同时表达的方向越多 —— 这是 5M → 10.7M → 18.7M 一路涨点的来源。</Text>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.45 }}>但拐点在 10M 之后：18.7M → 72.5M 仅 +0.048。</Text>
+        <Text style={{ fontSize: 12.5, color: '#B45309', fontWeight: 'bold' }}>按公式定形状即可，不盲目加宽</Text>
+      </Box>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 16, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #E2E8F0', paddingTop: 8 }}>
+    <Text style={{ fontSize: 12, color: '#94A3B8' }}>4090 峰值取 bf16 密集算力 165.2 TFLOPS，带宽 1008 GB/s；公式按 diffusion/unet.py 的 3×3 ResBlock 写；利用率口径为前向+反向，详见第 09 页</Text>
+    <Text style={{ fontSize: 12, color: '#475569', fontWeight: 'bold' }}>08 / 13</Text>
+  </Box>
+</Slide>

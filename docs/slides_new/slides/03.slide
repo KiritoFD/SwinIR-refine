@@ -1,0 +1,124 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 20, left: 70, right: 70, flexDirection: 'column', gap: 3 }}>
+    <Text style={{ fontSize: 13, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>01 领域 · 技术路线</Text>
+    <Text style={{ fontSize: 26, color: '#0E3F8C', fontWeight: 'bold' }}>真实超分的方法演进：卷积网络、对抗生成网络、扩散模型</Text>
+    <Text style={{ fontSize: 12.5, color: '#4A5568' }}>数值取自各方法原始论文所报的测试集，评测协议互不相同，仅用于说明量级；本文在同协议下的对比见第 12 页</Text>
+  </Box>
+
+  {/* 表头：宽度按各栏字数比例分配（105 / 115 / 286 / 254 / 251 / 129 = 1140） */}
+  <Box style={{ position: 'absolute', top: 92, left: 70, right: 70, flexDirection: 'row', height: 26, background: '#0E3F8C', borderRadius: 3 }}>
+    <Box style={{ width: 105, padding: 6, justifyContent: 'center' }}><Text style={{ fontSize: 12.5, color: '#FFFFFF', fontWeight: 'bold' }}>阶段 · 年份</Text></Box>
+    <Box style={{ width: 115, padding: 6, justifyContent: 'center' }}><Text style={{ fontSize: 12.5, color: '#FFFFFF', fontWeight: 'bold' }}>代表方法</Text></Box>
+    <Box style={{ width: 286, padding: 6, justifyContent: 'center' }}><Text style={{ fontSize: 12.5, color: '#FFFFFF', fontWeight: 'bold' }}>核心做法</Text></Box>
+    <Box style={{ width: 254, padding: 6, justifyContent: 'center' }}><Text style={{ fontSize: 12.5, color: '#FFFFFF', fontWeight: 'bold' }}>优势</Text></Box>
+    <Box style={{ width: 251, padding: 6, justifyContent: 'center' }}><Text style={{ fontSize: 12.5, color: '#FFFFFF', fontWeight: 'bold' }}>局限</Text></Box>
+    <Box style={{ flex: 1, padding: 6, justifyContent: 'center' }}><Text style={{ fontSize: 12.5, color: '#FFFFFF', fontWeight: 'bold' }}>报告数值</Text></Box>
+  </Box>
+
+  {/* 四代路线 */}
+  <Box style={{ position: 'absolute', top: 118, left: 70, right: 70, height: 474, flexDirection: 'column' }}>
+
+    {/* 一、卷积网络 */}
+    <Box style={{ flexDirection: 'row', height: 114, border: '1px solid #D6DCE5' }}>
+      <Box style={{ width: 105, padding: 7, background: '#F0F5FC', borderLeft: '5px solid #0E3F8C' }}>
+        <Text style={{ fontSize: 12, color: '#0E3F8C', fontWeight: 'bold', lineHeight: 1.3 }}>一、卷积网络</Text>
+        <Text style={{ fontSize: 12, color: '#4A5568', lineHeight: 1.3 }}>2014 – 2019</Text>
+      </Box>
+      <Box style={{ width: 115, padding: 7 }}>
+        <Text style={{ fontSize: 12, color: '#1A2230', lineHeight: 1.35 }}>SRCNN · VDSR{"\n"}EDSR{"\n"}RCAN · LP-KPN</Text>
+      </Box>
+      <Box style={{ width: 286, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.4 }}>用堆叠卷积拟合由低分辨率到高分辨率的映射，损失为 L1 或 L2。EDSR 去掉批归一化并加深网络，RCAN 用通道注意力对特征重新标定，LP-KPN 在拉普拉斯金字塔各层分别预测卷积核。</Text>
+      </Box>
+      <Box style={{ width: 254, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.4 }}>训练稳定、结果可复现；在配对数据上保真度最高；推理只需一次前向，速度最快，多数落地系统仍以此为基础。</Text>
+      </Box>
+      <Box style={{ width: 251, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#D9534F', lineHeight: 1.4 }}>L2 准则下的最优解是条件均值，高频纹理被平均，输出偏平滑；继续加深网络收益递减，感受野受卷积核尺寸限制。</Text>
+      </Box>
+      <Box style={{ flex: 1, padding: 7, background: '#F7F9FC' }}>
+        <Text style={{ fontSize: 12, color: '#8B97A8', lineHeight: 1.3 }}>RealSR ×2</Text>
+        <Text style={{ fontSize: 12.5, color: '#0E3F8C', fontWeight: 'bold', lineHeight: 1.35 }}>LP-KPN 约 33.5–34 dB{"\n"}本文复现 EDSR{"\n"}33.60 / 0.9167</Text>
+      </Box>
+    </Box>
+
+    {/* 二、Transformer */}
+    <Box style={{ flexDirection: 'row', height: 114, border: '1px solid #D6DCE5', borderTop: 'none' }}>
+      <Box style={{ width: 105, padding: 7, background: '#F0F5FC', borderLeft: '5px solid #1E4FA8' }}>
+        <Text style={{ fontSize: 12, color: '#0E3F8C', fontWeight: 'bold', lineHeight: 1.3 }}>二、Transformer</Text>
+        <Text style={{ fontSize: 12, color: '#4A5568', lineHeight: 1.3 }}>2021 – 2023</Text>
+      </Box>
+      <Box style={{ width: 115, padding: 7 }}>
+        <Text style={{ fontSize: 12, color: '#1A2230', lineHeight: 1.35 }}>SwinIR{"\n"}Restormer · HAT</Text>
+      </Box>
+      <Box style={{ width: 286, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.4 }}>把卷积替换为窗口自注意力：在局部窗口内计算注意力以控制复杂度，再通过窗口移位实现跨窗口的信息交换。相比卷积可以建模更长程的依赖关系。</Text>
+      </Box>
+      <Box style={{ width: 254, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.4 }}>相同参数量下优于卷积网络，成为 2021 年之后的主流骨干；对退化形式的变化更鲁棒，跨数据集泛化更好。</Text>
+      </Box>
+      <Box style={{ width: 251, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#D9534F', lineHeight: 1.4 }}>注意力在超分这类逐像素的密集预测任务上开销很大，计算量与显存随图像分辨率平方增长，难以避免。</Text>
+      </Box>
+      <Box style={{ flex: 1, padding: 7, background: '#F7F9FC' }}>
+        <Text style={{ fontSize: 12, color: '#8B97A8', lineHeight: 1.3 }}>RealSR ×2</Text>
+        <Text style={{ fontSize: 12.5, color: '#0E3F8C', fontWeight: 'bold', lineHeight: 1.35 }}>SwinIR 约 34.1–34.4 dB{"\n"}本文重训 SwinIR{"\n"}32.97 / 0.9058</Text>
+      </Box>
+    </Box>
+
+    {/* 三、GAN */}
+    <Box style={{ flexDirection: 'row', height: 114, border: '1px solid #D6DCE5', borderTop: 'none' }}>
+      <Box style={{ width: 105, padding: 7, background: '#FDF3F2', borderLeft: '5px solid #D9534F' }}>
+        <Text style={{ fontSize: 12, color: '#D9534F', fontWeight: 'bold', lineHeight: 1.3 }}>三、生成对抗</Text>
+        <Text style={{ fontSize: 12, color: '#4A5568', lineHeight: 1.3 }}>2017 – 2022</Text>
+      </Box>
+      <Box style={{ width: 115, padding: 7 }}>
+        <Text style={{ fontSize: 12, color: '#1A2230', lineHeight: 1.35 }}>SRGAN · ESRGAN{"\n"}BSRGAN{"\n"}Real-ESRGAN</Text>
+      </Box>
+      <Box style={{ width: 286, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.4 }}>在像素损失之外引入判别器，判别器区分重建结果与真实图像，生成器试图骗过它，对抗训练促使网络产生更锐利的高频纹理。ESRGAN 去掉批归一化并把判别器改为相对判别。</Text>
+      </Box>
+      <Box style={{ width: 254, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.4 }}>无参考感知质量显著提升。Real-ESRGAN 通过模拟模糊、噪声、压缩串联的复杂退化过程提升了对真实退化的鲁棒性，是实用场景的主流选择。</Text>
+      </Box>
+      <Box style={{ width: 251, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#D9534F', lineHeight: 1.4 }}>生成的高频在原图中并不存在，同源数据上客观保真度明显下降；对抗训练不稳定，容易产生伪影与纹理幻觉。</Text>
+      </Box>
+      <Box style={{ flex: 1, padding: 7, background: '#F7F9FC' }}>
+        <Text style={{ fontSize: 12, color: '#8B97A8', lineHeight: 1.3 }}>RealSR ×4</Text>
+        <Text style={{ fontSize: 12.5, color: '#0E3F8C', fontWeight: 'bold', lineHeight: 1.35 }}>BSRGAN 26.38 / 0.7651{"\n"}Real-ESRGAN{"\n"}26.65 / 0.7603</Text>
+      </Box>
+    </Box>
+
+    {/* 四、扩散 */}
+    <Box style={{ flexDirection: 'row', height: 132, border: '1px solid #D6DCE5', borderTop: 'none' }}>
+      <Box style={{ width: 105, padding: 7, background: '#FFF4E6', borderLeft: '5px solid #FFC107' }}>
+        <Text style={{ fontSize: 12, color: '#0E3F8C', fontWeight: 'bold', lineHeight: 1.3 }}>四、扩散模型</Text>
+        <Text style={{ fontSize: 12, color: '#4A5568', lineHeight: 1.3 }}>2023 – 2025</Text>
+      </Box>
+      <Box style={{ width: 115, padding: 7 }}>
+        <Text style={{ fontSize: 12, color: '#1A2230', lineHeight: 1.35 }}>StableSR · DiffBIR{"\n"}ResShift · SeeSR{"\n"}OSEDiff</Text>
+      </Box>
+      <Box style={{ width: 286, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.4 }}>把超分建模为逐步去噪的生成过程：先学习图像分布，推理时从噪声出发逐步恢复。StableSR 等借助大规模预训练扩散模型的先验约束解空间，ResShift 等压缩采样步数以降低延迟。</Text>
+      </Box>
+      <Box style={{ width: 254, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.4 }}>无参考感知指标最高，可以输出多个合理结果，对严重退化鲁棒。StableSR 与 SeeSR 在 ×4 下 PSNR 为 28.04 与 28.14，MUSIQ 达 58.5 与 64.7。</Text>
+      </Box>
+      <Box style={{ width: 251, padding: 7 }}>
+        <Text style={{ fontSize: 12.5, color: '#D9534F', lineHeight: 1.4 }}>保真度低于判别式方法；推理需多步采样，计算成本高；性能依赖大规模预训练模型与海量数据，在仅有数百对样本的真实配对数据上难以复现 —— 本文自训的对照臂只有 28.36。</Text>
+      </Box>
+      <Box style={{ flex: 1, padding: 7, background: '#FFF4E6' }}>
+        <Text style={{ fontSize: 12, color: '#8B97A8', lineHeight: 1.3 }}>RealSR ×4</Text>
+        <Text style={{ fontSize: 12.5, color: '#0E3F8C', fontWeight: 'bold', lineHeight: 1.35 }}>StableSR 28.04{"\n"}DiffBIR 25.93{"\n"}SeeSR 28.14{"\n"}本文对照臂 28.36</Text>
+      </Box>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 22, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 11 }}>
+    <Text style={{ fontSize: 12.5, color: '#8B97A8' }}>数据来源：docs/baseline/README.md。前两代以配对真值的像素与结构指标为目标，后两代以人眼观感为目标，两者在数学上相互制约</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>03 / 13</Text>
+  </Box>
+</Slide>

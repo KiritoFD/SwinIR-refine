@@ -1,0 +1,88 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 30, left: 70, right: 70, flexDirection: 'column', gap: 5 }}>
+    <Text style={{ fontSize: 13, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>01 领域 · 问题定义</Text>
+    <Text style={{ fontSize: 29, color: '#0E3F8C', fontWeight: 'bold' }}>真实超分：把低分辨率照片还原为高分辨率，且训练数据来自真实拍摄</Text>
+    <Text style={{ fontSize: 13, color: '#4A5568' }}>RealSR 基准（Cai et al., ICCV 2019）· 训练 406 对 · 测试 100 对</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 118, left: 70, width: 660, height: 452, background: '#F7F9FC', border: '1px solid #D6DCE5', borderRadius: 4, padding: 14, flexDirection: 'column', gap: 8 }}>
+    <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>配对数据的构造方式</Text>
+
+    <Box style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <svg viewBox="0 0 620 240" width="620" height="238" xmlns="http://www.w3.org/2000/svg">
+        <rect x="8" y="58" width="76" height="120" fill="#E8EFF8" stroke="#0E3F8C" strokeWidth="2" />
+        <text x="46" y="112" fontSize="12" fill="#0E3F8C" textAnchor="middle" fontWeight="bold">同一</text>
+        <text x="46" y="128" fontSize="12" fill="#0E3F8C" textAnchor="middle" fontWeight="bold">场景</text>
+
+        <line x1="84" y1="95" x2="122" y2="95" stroke="#0E3F8C" strokeWidth="2" />
+        <polygon points="122,95 113,90 113,100" fill="#0E3F8C" />
+        <line x1="84" y1="145" x2="122" y2="145" stroke="#0E3F8C" strokeWidth="2" />
+        <polygon points="122,145 113,140 113,150" fill="#0E3F8C" />
+
+        <rect x="122" y="72" width="122" height="46" fill="#FFFFFF" stroke="#0E3F8C" strokeWidth="1.5" />
+        <text x="183" y="90" fontSize="11" fill="#1A2230" textAnchor="middle" fontWeight="bold">短焦距拍摄</text>
+        <text x="183" y="106" fontSize="10" fill="#4A5568" textAnchor="middle">Canon 5D3 / Nikon D810</text>
+
+        <rect x="122" y="126" width="122" height="46" fill="#FFFFFF" stroke="#0E3F8C" strokeWidth="1.5" />
+        <text x="183" y="144" fontSize="11" fill="#1A2230" textAnchor="middle" fontWeight="bold">长焦距拍摄</text>
+        <text x="183" y="160" fontSize="10" fill="#4A5568" textAnchor="middle">同一机位 · 光学变焦</text>
+
+        <line x1="244" y1="95" x2="286" y2="95" stroke="#0E3F8C" strokeWidth="2" />
+        <polygon points="286,95 277,90 277,100" fill="#0E3F8C" />
+        <line x1="244" y1="145" x2="286" y2="145" stroke="#0E3F8C" strokeWidth="2" />
+        <polygon points="286,145 277,140 277,150" fill="#0E3F8C" />
+
+        <rect x="286" y="60" width="84" height="74" fill="#D6DCE5" stroke="#4A5568" strokeWidth="1.5" />
+        <text x="328" y="94" fontSize="13" fill="#1A2230" textAnchor="middle" fontWeight="bold">LR 输入</text>
+        <text x="328" y="112" fontSize="10" fill="#4A5568" textAnchor="middle">低分辨率</text>
+
+        <rect x="286" y="144" width="112" height="92" fill="#FFFFFF" stroke="#0E3F8C" strokeWidth="1.5" />
+        <text x="342" y="186" fontSize="13" fill="#0E3F8C" textAnchor="middle" fontWeight="bold">HR 真值</text>
+        <text x="342" y="204" fontSize="10" fill="#4A5568" textAnchor="middle">高分辨率</text>
+
+        <line x1="328" y1="136" x2="342" y2="144" stroke="#D9534F" strokeWidth="1.5" strokeDasharray="4,3" />
+
+        <rect x="428" y="52" width="184" height="184" fill="#FFF4E6" stroke="#D9534F" strokeWidth="1.5" />
+        <text x="520" y="78" fontSize="12" fill="#D9534F" textAnchor="middle" fontWeight="bold">与合成超分的区别</text>
+        <text x="444" y="102" fontSize="10" fill="#1A2230">合成超分：先对真值做模糊</text>
+        <text x="444" y="118" fontSize="10" fill="#1A2230">和下采样，再当作输入</text>
+        <text x="444" y="142" fontSize="10" fill="#1A2230">本数据集：LR 来自真实成像，</text>
+        <text x="444" y="158" fontSize="10" fill="#1A2230">LR 与 HR 是同一场景两次拍摄</text>
+        <text x="444" y="182" fontSize="10" fill="#D9534F" fontWeight="bold">因此 LR 与 HR 无法完全对齐，</text>
+        <text x="444" y="198" fontSize="10" fill="#D9534F" fontWeight="bold">退化核也无法写成解析式</text>
+      </svg>
+    </Box>
+
+    <Text style={{ fontSize: 12, color: '#4A5568' }}>评测口径：Limited-range Y 通道 · uint8 · 按 4 整除裁剪 · 不裁剪边界 · 100 对取平均</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 118, right: 70, width: 470, flexDirection: 'column', gap: 11 }}>
+
+    <Box style={{ background: '#FFFFFF', border: '1px solid #D6DCE5', borderLeft: '5px solid #0E3F8C', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 4 }}>
+      <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>难点一 · 退化未知且逐图不同</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>LR 的模糊程度随焦距、景深与对焦误差变化，不同场景之间也不一致。因此不存在一个可统一估计的模糊核，基于核估计的方法在本数据集上误差较大。</Text>
+    </Box>
+
+    <Box style={{ background: '#FFFFFF', border: '1px solid #D6DCE5', borderLeft: '5px solid #D9534F', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 4 }}>
+      <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>难点二 · LR 与 HR 存在配准残差</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>即便使用 SIFT + RANSAC 配准，真实变焦对仍保留约 0.2–0.5 像素的非刚性局部错位。这项误差与模型无关，直接构成 PSNR 的上限（见第 04 页）。</Text>
+    </Box>
+
+    <Box style={{ background: '#FFFFFF', border: '1px solid #D6DCE5', borderLeft: '5px solid #FFC107', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 4 }}>
+      <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>难点三 · HR 真值本身含传感器噪声</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>HR 由相机实际拍摄得到，包含光子噪声与暗电流噪声，并非理想干净图像。用小波系数中位数估计，噪声强度 σ̂ ≈ 0.90（0–255 码值）。</Text>
+    </Box>
+
+    <Box style={{ background: '#F0F5FC', border: '1px solid #C7D9F2', borderRadius: 4, padding: 13, flexDirection: 'column', gap: 4 }}>
+      <Text style={{ fontSize: 14, color: '#0E3F8C', fontWeight: 'bold' }}>由此产生的方法学分歧</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>合成数据上训练的模型在真实配对上会系统性下降；而在真实配对上，上述误差决定了 PSNR 存在有限上限。</Text>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 24, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 12 }}>
+    <Text style={{ fontSize: 12.5, color: '#8B97A8' }}>参考文献：Cai et al., ICCV 2019；Zhou et al., Updating the Evaluation of Super-Resolution, CVPR 2021</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>02 / 13</Text>
+  </Box>
+</Slide>

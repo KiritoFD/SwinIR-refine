@@ -1,0 +1,129 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#7F1D1D' }} />
+
+  <Box style={{ position: 'absolute', top: 20, left: 70, right: 70, flexDirection: 'column', gap: 3 }}>
+    <Text style={{ fontSize: 13, color: '#B91C1C', letterSpacing: 4, fontWeight: 'bold' }}>05 实验 · 负面结果 · 什么被证伪了</Text>
+    <Text style={{ fontSize: 26, color: '#1E293B', fontWeight: 'bold' }}>Mamba Out! 指标没打赢，效率也没打赢 —— 8 个臂、10.3 小时，一无所获</Text>
+    <Text style={{ fontSize: 12.5, color: '#4A5568' }}>官方 100 对口径。先把两条战线都摆出来：<b style={{ color: '#B91C1C' }}>质量上等预算输 2.28 dB，工程上利用率只有 U-Net 的五分之一</b></Text>
+  </Box>
+
+  {/* 主区 */}
+  <Box style={{ position: 'absolute', top: 90, left: 70, right: 70, height: 452, flexDirection: 'row', gap: 12 }}>
+
+    {/* 左：矩阵表 */}
+    <Box style={{ flex: 1.45, background: '#FEF6F6', border: '1px solid #F3D4D4', borderLeft: '5px solid #B91C1C', borderRadius: 4, padding: 11, flexDirection: 'column', gap: 7 }}>
+      <Text style={{ fontSize: 14, color: '#7F1D1D', fontWeight: 'bold' }}>Mamba 矩阵：8 个臂，一个都没打赢同预算的 U-Net</Text>
+      <Table
+        style={{ width: '100%', height: 240 }}
+        defaultTextStyle={{ fontSize: 12, textAlign: 'center', color: '#1A2230' }}
+        defaultCellStyle={{ border: { left: { width: 1, color: '#EAD7D7' }, right: { width: 1, color: '#EAD7D7' }, top: { width: 1, color: '#EAD7D7' }, bottom: { width: 1, color: '#EAD7D7' } }, padding: 3 }}
+        cells={[
+          [
+            { text: '骨干 · 步长', textStyle: { bold: true, color: '#FFFFFF', fontSize: 11.5, textAlign: 'left' }, cellStyle: { background: { color: '#7F1D1D' } } },
+            { text: '参数', textStyle: { bold: true, color: '#FFFFFF', fontSize: 11.5 }, cellStyle: { background: { color: '#7F1D1D' } } },
+            { text: '样本', textStyle: { bold: true, color: '#FFFFFF', fontSize: 11.5 }, cellStyle: { background: { color: '#7F1D1D' } } },
+            { text: 'PSNR-Y', textStyle: { bold: true, color: '#FFFFFF', fontSize: 11.5 }, cellStyle: { background: { color: '#7F1D1D' } } },
+            { text: 'SSIM', textStyle: { bold: true, color: '#FFFFFF', fontSize: 11.5 }, cellStyle: { background: { color: '#7F1D1D' } } },
+            { text: 'MUSIQ', textStyle: { bold: true, color: '#FFFFFF', fontSize: 11.5 }, cellStyle: { background: { color: '#7F1D1D' } } },
+          ],
+          [
+            { text: 'U-Net · 不下采样', textStyle: { fontSize: 11.5, textAlign: 'left', bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '18.67M', textStyle: { fontSize: 11.5, color: '#334155' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '328k', textStyle: { fontSize: 11.5, bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '33.97', textStyle: { fontSize: 12, bold: true, color: '#15803D' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '0.922', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '53.9', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          ],
+          [
+            { text: 'Mamba · 下降采样 · c96', textStyle: { fontSize: 11.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '0.43M', textStyle: { fontSize: 11.5, color: '#B91C1C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '328k', textStyle: { fontSize: 11.5, bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '31.68', textStyle: { fontSize: 12, bold: true, color: '#B91C1C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '0.891', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '40.2', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          ],
+          [
+            { text: 'U-Net · 不下采样', textStyle: { fontSize: 11.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '18.67M', textStyle: { fontSize: 11.5, color: '#334155' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '439k', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '34.04', textStyle: { fontSize: 12, color: '#15803D' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '0.923', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '54.5', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          ],
+          [
+            { text: 'Mamba · 下降采样 · c96', textStyle: { fontSize: 11.5, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '0.43M', textStyle: { fontSize: 11.5, color: '#B91C1C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '1.54M', textStyle: { fontSize: 11.5, bold: true, color: '#B91C1C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '33.42', textStyle: { fontSize: 12, bold: true, color: '#B91C1C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '0.913', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+            { text: '51.4', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          ],
+          [
+            { text: 'Mamba · 不下采样 · c96', textStyle: { fontSize: 11.5, textAlign: 'left', bold: true }, cellStyle: { background: { color: '#FFF7ED' } } },
+            { text: '0.43M', textStyle: { fontSize: 11.5, color: '#C2410C', bold: true }, cellStyle: { background: { color: '#FFF7ED' } } },
+            { text: '269k', textStyle: { fontSize: 11.5, bold: true }, cellStyle: { background: { color: '#FFF7ED' } } },
+            { text: '32.57', textStyle: { fontSize: 12, bold: true, color: '#C2410C' }, cellStyle: { background: { color: '#FFF7ED' } } },
+            { text: '0.900', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFF7ED' } } },
+            { text: '43.4', textStyle: { fontSize: 11.5 }, cellStyle: { background: { color: '#FFF7ED' } } },
+          ],
+        ]}
+      />
+      <Text style={{ fontSize: 12, color: '#7F1D1D', lineHeight: 1.42 }}>等预算硬对照（第 1、2 行，样本数逐点对齐）：<b>U-Net 高 2.28 dB</b>，而它参数是 Mamba 的 <b>43 倍</b>——Mamba 堆到 4.7 倍样本也只到 33.42，仍低于 U-Net 在 1/4.7 预算下的 33.97。<b>注意三个 Mamba 臂全是 c96（0.43M），比 U-Net 小两个数量级</b>：参数少不是它输的理由，容量在它身上同样不吃。</Text>
+      <Text style={{ fontSize: 12, color: '#7F1D1D', lineHeight: 1.42 }}>四指标排序与 PSNR 完全一致（SSIM 0.891 vs 0.922、MUSIQ 40.2 vs 53.9）⇒ 不是换了感知风格，是真的学不会。唯一正向：Mamba 内部「不下采样」优于「下降采样」+0.89 dB，但仍差 U-Net 约 1.0 dB。</Text>
+      <Text style={{ fontSize: 12, color: '#B91C1C', fontWeight: 'bold', lineHeight: 1.36 }}>结论：质量与工程两条战线全输，Mamba 线关闭，不再投预算。</Text>
+    </Box>
+
+    {/* 右：infra */}
+    <Box style={{ flex: 1, flexDirection: 'column', gap: 7 }}>
+
+      <Box style={{ flex: 1.35, background: '#FFFFFF', border: '1px solid #E2E8F0', borderLeft: '5px solid #334155', borderRadius: 4, padding: 9, flexDirection: 'column', gap: 3 }}>
+        <Text style={{ fontSize: 13.5, color: '#1E293B', fontWeight: 'bold' }}>工程侧：利用率只有 U-Net 的五分之一</Text>
+        <Text style={{ fontSize: 12, color: '#1A2230', lineHeight: 1.38 }}>统一「前向 + 反向」口径下，<b style={{ color: '#15803D' }}>U-Net b64 跑到 20.0%</b>（33.1 TFLOPS），而 <b style={{ color: '#B91C1C' }}>Mamba 官方融合核只有 ≥3.6%</b>，纯 PyTorch 回退更跌到 <b style={{ color: '#B91C1C' }}>~0.1%</b> —— 回退路径 batch 超过 1 就 OOM，激活 50.3 GB，<b>根本不可训</b>。</Text>
+        <Text style={{ fontSize: 12, color: '#1A2230', lineHeight: 1.38 }}>原因是扫描算子的核内递推：每个位置都要把上一步状态<b>读回再写回</b>，序列越长费字节越多。墙钟上直接体现为 <b style={{ color: '#B91C1C' }}>全程不降采样（序列长 16384）30 秒/步 → 2 万步要 7 天</b>，单臂不可行；退回降采样（序列 4096）才压到 0.88 秒/步。</Text>
+        <Text style={{ fontSize: 12, color: '#1A2230', lineHeight: 1.38 }}>这与 U-Net 的瓶颈性质完全不同：U-Net 卡在 <b>conv GEMM 的 K 维</b>，Mamba 卡在<b>扫描的状态流量</b>。参数量不是原因 —— 矩阵臂只有 <b>0.43M（c96）</b>、用户规格的 c128×4 也仅 2.75M，都比 U-Net 的 18.67M 小一个到两个数量级，照样跑不动也赢不了。</Text>
+      </Box>
+
+      <Box style={{ flex: 1.15, background: '#F0F9FF', border: '1px solid #BAE6FD', borderLeft: '5px solid #0369A1', borderRadius: 4, padding: 9, flexDirection: 'column', gap: 3 }}>
+        <Text style={{ fontSize: 13.5, color: '#0C4A6E', fontWeight: 'bold' }}>为它铺的工程量 vs 我们正解的成本</Text>
+        <Text style={{ fontSize: 12, color: '#1A2230', lineHeight: 1.38 }}>为让它能跑：装 nvcc 12.8 + <b>源码编译官方 CUDA 核</b>，又自写一套<b>纯 PyTorch 精确回退</b>（实对角递推 <b style={{ color: '#0C4A6E' }}>h_t = P_t·(h_0 + Σ b_j/P_j)</b>，踩了累积衰减 clamp 冻结记忆、除法反向溢 fp32 变 NaN、bf16 累加丢尾数三个坑，对齐到 rel 1.4e-07）。整套矩阵烧掉 <b>10.3 小时</b>。</Text>
+        <Text style={{ fontSize: 12, color: '#0C4A6E', lineHeight: 1.38 }}>对照正解：<b>只加一个高频子带损失开关、不装任何库、单臂 1.6 小时</b>（λ=1，1.28M 样本）就拿到 +0.081 dB 且四指标同升，超过 Mamba 全部 8 个臂的最好成绩（33.42）。</Text>
+      </Box>
+
+    </Box>
+  </Box>
+
+  {/* 其他失败臂 */}
+  <Box style={{ position: 'absolute', top: 542, left: 70, right: 70, height: 124, background: '#F7F9FC', border: '1px solid #D6DCE5', borderRadius: 4, padding: 10, flexDirection: 'column', gap: 5 }}>
+    <Text style={{ fontSize: 13.5, color: '#334155', fontWeight: 'bold' }}>同批被判定为无效或负收益的机制（均已关线，不再投入预算）</Text>
+    <Table
+      style={{ width: '100%', height: 82 }}
+      defaultTextStyle={{ fontSize: 12, textAlign: 'center', color: '#1A2230' }}
+      defaultCellStyle={{ border: { left: { width: 1, color: '#D6DCE5' }, right: { width: 1, color: '#D6DCE5' }, top: { width: 1, color: '#D6DCE5' }, bottom: { width: 1, color: '#D6DCE5' } }, padding: 3 }}
+      cells={[
+        [
+          { text: '尝试', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#334155' } } },
+          { text: '判定', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#334155' } } },
+          { text: '尝试', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#334155' } } },
+          { text: '判定', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#334155' } } },
+        ],
+        [
+          { text: '压平通道金字塔', textStyle: { fontSize: 12, textAlign: 'left' } },
+          { text: '−0.07 dB，金字塔有用', textStyle: { fontSize: 12, color: '#B91C1C' } },
+          { text: '门控前馈层 / 坐标注入 / 频域软路由', textStyle: { fontSize: 12, textAlign: 'left' } },
+          { text: '全部打平微负，卖点未兑现', textStyle: { fontSize: 12, color: '#B91C1C' } },
+        ],
+        [
+          { text: 'UU 损失作重建项', textStyle: { fontSize: 12, textAlign: 'left' } },
+          { text: '−0.95 dB，不可用', textStyle: { fontSize: 12, color: '#B91C1C' } },
+          { text: '全局 FFT 频带增益头', textStyle: { fontSize: 12, textAlign: 'left' } },
+          { text: '负收益，相位不稳', textStyle: { fontSize: 12, color: '#B91C1C' } },
+        ],
+      ]}
+    />
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 14, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 8 }}>
+    <Text style={{ fontSize: 12.5, color: '#8B97A8' }}>收益排序实测为「架构 ≫ 容量 &gt; 数据 &gt; 步数」，但方向可以反着来：一个既学不会、又跑不动的算子，论文再新也救不了它</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>10 / 13</Text>
+  </Box>
+</Slide>

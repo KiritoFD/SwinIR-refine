@@ -1,0 +1,130 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 20, left: 70, right: 70, flexDirection: 'column', gap: 3 }}>
+    <Text style={{ fontSize: 13, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>04 硬件基础 · 算力利用率与基建事实</Text>
+    <Text style={{ fontSize: 26, color: '#0E3F8C', fontWeight: 'bold' }}>每个骨干的真实算力利用率：绑住效率的是卷积 GEMM 的形状，不是显存带宽</Text>
+    <Text style={{ fontSize: 12.5, color: '#4A5568' }}>4090 实测，统一 <b>前向 + 反向</b>口径（只算前向会把利用率系统性低估约 3 倍）；同表内数字可直接互比</Text>
+  </Box>
+
+  {/* MFU 大表 */}
+  <Box style={{ position: 'absolute', top: 88, left: 70, right: 70, height: 344, background: '#F7F9FC', border: '1px solid #D6DCE5', borderRadius: 4, padding: 10, flexDirection: 'column', gap: 5 }}>
+    <Text style={{ fontSize: 14, color: '#0E3F8C', fontWeight: 'bold' }}>MFU 总表（前向 + 反向口径，RTX 4090 实测；峰值 165.2 TFLOPS bf16 dense）</Text>
+    <Table
+      style={{ width: '100%', height: 302 }}
+      defaultTextStyle={{ fontSize: 12, textAlign: 'center', color: '#1A2230' }}
+      defaultCellStyle={{ border: { left: { width: 1, color: '#D6DCE5' }, right: { width: 1, color: '#D6DCE5' }, top: { width: 1, color: '#D6DCE5' }, bottom: { width: 1, color: '#D6DCE5' } }, padding: 4 }}
+      cells={[
+        [
+          { text: '骨干', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '参数', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'batch', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'GFLOP/图', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 's/步', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '算力', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'MFU', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+        ],
+        [
+          { text: 'U-Net b32（不下采样）', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '4.99M', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '64', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '37.2', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.156', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '15.3', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '9.3%', textStyle: { fontSize: 12, color: '#64748B' }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'U-Net b40', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '7.58M', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '64', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '57.0', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.193', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '18.9', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '11.5%', textStyle: { fontSize: 12, color: '#64748B' }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'U-Net b48', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '10.73M', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '64', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '81.0', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.223', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '23.3', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '14.1%', textStyle: { fontSize: 12, color: '#64748B' }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'U-Net b64（交付骨干）', textStyle: { fontSize: 12, textAlign: 'left', bold: true, color: '#0E3F8C' }, cellStyle: { background: { color: '#EAF1FB' } } },
+          { text: '18.67M', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#EAF1FB' } } },
+          { text: '64', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#EAF1FB' } } },
+          { text: '141.6', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#EAF1FB' } } },
+          { text: '0.274', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#EAF1FB' } } },
+          { text: '33.1', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#EAF1FB' } } },
+          { text: '20.0%', textStyle: { fontSize: 13, bold: true, color: '#0E3F8C' }, cellStyle: { background: { color: '#EAF1FB' } } },
+        ],
+        [
+          { text: 'U-Net b128', textStyle: { fontSize: 12, textAlign: 'left', bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '72.53M', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '32', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '551.8', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.308', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '57.4', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '34.7%', textStyle: { fontSize: 13, bold: true, color: '#15803D' }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'DiT-S（全文注意力）', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '34.0M', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '16', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '1604.6', textStyle: { fontSize: 12, bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.505', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '50.8', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '30.8%', textStyle: { fontSize: 12.5, bold: true }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: 'Mamba 官核（融合 CUDA）', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '2.75M', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '16', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '190', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '0.518', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '≥5.9', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '≥3.6%', textStyle: { fontSize: 12.5, bold: true, color: '#B91C1C' }, cellStyle: { background: { color: '#FFF4E6' } } },
+        ],
+        [
+          { text: 'Mamba 纯 PyTorch 回退', textStyle: { fontSize: 12, textAlign: 'left' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '2.75M', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '1', textStyle: { fontSize: 12, bold: true, color: '#B91C1C' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '314', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '2.51', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '0.1', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '~0.1%', textStyle: { fontSize: 12.5, bold: true, color: '#B91C1C' }, cellStyle: { background: { color: '#FFF4E6' } } },
+        ],
+      ]}
+    />
+  </Box>
+
+  {/* 三条结论 */}
+  <Box style={{ position: 'absolute', top: 444, left: 70, right: 70, height: 200, flexDirection: 'row', gap: 10 }}>
+
+    <Box style={{ flex: 1, background: '#EAF1FB', border: '1px solid #C7D9F2', borderLeft: '4px solid #0E3F8C', borderRadius: 4, padding: 12, flexDirection: 'column', gap: 6 }}>
+      <Text style={{ fontSize: 14, color: '#0E3F8C', fontWeight: 'bold' }}>利用率随通道数单调上升</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>b32 → b128：<b>9.3% → 34.7%</b>，三倍多的差距，而模型的参数与计算量比值几乎不变。</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>原因不在算法而在卷积本身：<b>通道 C=32 时卷积 GEMM 的 K 维只有 32</b>，张量核喂不饱，算力从 33 掉到 15 TFLOPS。省下 FLOPs 的收益被执行效率的损失吃掉，<b>收窄通道反而慢 2.6 倍</b>。</Text>
+    </Box>
+
+    <Box style={{ flex: 1, background: '#FFFFFF', border: '1px solid #E2E8F0', borderLeft: '4px solid #334155', borderRadius: 4, padding: 12, flexDirection: 'column', gap: 6 }}>
+      <Text style={{ fontSize: 14, color: '#1E293B', fontWeight: 'bold' }}>带宽不是瓶颈，形状才是</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>两个骨干的模型级算术强度都<b>远高于拐点 164 FLOP/byte</b>（DiT 1962、U-Net 12422），按带宽判据谁都不该被卡住。</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>真正绑住 U-Net 的是 <b>conv GEMM 的 K 维与 128 通道对齐</b>：对齐后同卡算力 1.8×。→ 调 batch、拉存算比都无效，只有改架构把 FLOPs 挪到更宽更低的分辨率才有效。</Text>
+    </Box>
+
+    <Box style={{ flex: 1, background: '#FFF4E6', border: '1px solid #FDE3B8', borderLeft: '4px solid #B45309', borderRadius: 4, padding: 12, flexDirection: 'column', gap: 6 }}>
+      <Text style={{ fontSize: 14, color: '#92400E', fontWeight: 'bold' }}>高利用率 ≠ 高效率</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>DiT-S 利用率 30.8% 略高于 U-Net 的 20%，但它把 <b>11.3 倍于 U-Net 的 FLOPs</b>（每图 1604.6 vs 141.6 GFLOP）花在占其 64% 的全分辨率平方注意力上。</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>同口径实测吞吐：<b>U-Net 233 vs DiT 31.7 图/秒 = 7.4×</b>。→ 利用率是分母的艺术，挪走 FLOPs 才是真收益。</Text>
+    </Box>
+
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 14, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 8 }}>
+    <Text style={{ fontSize: 12.5, color: '#8B97A8' }}>口径：一个完整训练步（前向 + 反向 + 优化器步），bf16 autocast，FlopCounterMode 计数；Mamba 官核为下界（融合扫描核自身 FLOPs 未计入）</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>09 / 13</Text>
+  </Box>
+</Slide>

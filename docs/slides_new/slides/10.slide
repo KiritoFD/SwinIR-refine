@@ -1,0 +1,80 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 30, left: 70, right: 70, flexDirection: 'column', gap: 5 }}>
+    <Text style={{ fontSize: 13, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>05 结论</Text>
+    <Text style={{ fontSize: 29, color: '#0E3F8C', fontWeight: 'bold' }}>总结：方法、性能、以及后续工作</Text>
+    <Text style={{ fontSize: 13, color: '#4A5568' }}>在官方协议下，本文结果已达 ×2 尺度的实测上限区间</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 114, left: 70, right: 70, height: 384, flexDirection: 'row', gap: 14 }}>
+
+    <Box style={{ flex: 1, background: '#0E3F8C', padding: 16, borderRadius: 4, flexDirection: 'column', gap: 10 }}>
+      <Text style={{ fontSize: 12, color: '#C7D9F2', letterSpacing: 3 }}>01 · 方法</Text>
+      <Text style={{ fontSize: 19, color: '#FFFFFF', fontWeight: 'bold' }}>不改结构地提升高频重建</Text>
+      <Text style={{ fontSize: 12, color: '#D9E6F7' }}>主干在目标分辨率上直接运算，不做下采样；在此基础上增加高频子带损失与平移平均，并采用正交化优化器。</Text>
+      <Text style={{ fontSize: 12, color: '#D9E6F7' }}>其中三项不增加推理开销；参数从 18.7M 放大到 72.5M 仅带来 0.05 dB 增益，说明瓶颈不在容量。</Text>
+      <Box style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+        <Box style={{ background: 'rgba(255,255,255,0.14)', padding: 5, borderRadius: 3, flexDirection: 'column', alignItems: 'center', width: 88 }}>
+          <Text style={{ fontSize: 18, color: '#FFC107', fontWeight: 'bold' }}>34.41</Text>
+          <Text style={{ fontSize: 12, color: '#D9E6F7' }}>PSNR-Y</Text>
+        </Box>
+        <Box style={{ background: 'rgba(255,255,255,0.14)', padding: 5, borderRadius: 3, flexDirection: 'column', alignItems: 'center', width: 88 }}>
+          <Text style={{ fontSize: 18, color: '#FFC107', fontWeight: 'bold' }}>0.9285</Text>
+          <Text style={{ fontSize: 12, color: '#D9E6F7' }}>SSIM</Text>
+        </Box>
+        <Box style={{ background: 'rgba(255,255,255,0.14)', padding: 5, borderRadius: 3, flexDirection: 'column', alignItems: 'center', width: 88 }}>
+          <Text style={{ fontSize: 18, color: '#FFC107', fontWeight: 'bold' }}>55.96</Text>
+          <Text style={{ fontSize: 12, color: '#D9E6F7' }}>MUSIQ</Text>
+        </Box>
+        <Box style={{ background: 'rgba(255,255,255,0.14)', padding: 5, borderRadius: 3, flexDirection: 'column', alignItems: 'center', width: 88 }}>
+          <Text style={{ fontSize: 18, color: '#FFC107', fontWeight: 'bold' }}>0.3534</Text>
+          <Text style={{ fontSize: 12, color: '#D9E6F7' }}>MANIQA</Text>
+        </Box>
+      </Box>
+      <Text style={{ fontSize: 12.5, color: '#C7D9F2' }}>18.7M 参数 · 相对同协议重训的 SwinIR-largeish：+1.44 dB / +0.023 SSIM / +9.2 MUSIQ / +0.048 MANIQA</Text>
+    </Box>
+
+    <Box style={{ flex: 1, background: '#FFFFFF', padding: 16, border: '1px solid #D6DCE5', borderTop: '4px solid #0E3F8C', borderRadius: 4, flexDirection: 'column', gap: 8 }}>
+      <Text style={{ fontSize: 12, color: '#1E4FA8', letterSpacing: 3, fontWeight: 'bold' }}>02 · 性能上限</Text>
+      <Text style={{ fontSize: 19, color: '#0E3F8C', fontWeight: 'bold' }}>误差中的不可消除部分</Text>
+      <Box style={{ background: '#F0F5FC', padding: 10, borderRadius: 3, flexDirection: 'column', gap: 3 }}>
+        <Text style={{ fontSize: 12, color: '#4A5568' }}>×2 实测可达区间</Text>
+        <Text style={{ fontSize: 23, color: '#0E3F8C', fontWeight: 'bold' }}>34.4 – 35.7 dB</Text>
+        <Text style={{ fontSize: 12.5, color: '#4A5568' }}>本文 34.41 dB，位于区间内</Text>
+      </Box>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>主要限制项是配准残差，而非带宽或噪声（噪声对应上限约 49 dB）。因此在 ×2 上继续提高保真指标的收益已经有限。</Text>
+      <Box style={{ background: '#FFF4E6', padding: 8, borderRadius: 3 }}>
+        <Text style={{ fontSize: 12, color: '#1A2230', fontWeight: 'bold' }}>例外：×3 实测 31.13 dB，与上限（约 34.4 dB）相差约 3 dB，仍有提升空间。</Text>
+      </Box>
+    </Box>
+
+    <Box style={{ flex: 1, background: '#FFFFFF', padding: 16, border: '1px solid #D6DCE5', borderTop: '4px solid #FFC107', borderRadius: 4, flexDirection: 'column', gap: 8 }}>
+      <Text style={{ fontSize: 12, color: '#1E4FA8', letterSpacing: 3, fontWeight: 'bold' }}>03 · 后续工作</Text>
+      <Text style={{ fontSize: 19, color: '#0E3F8C', fontWeight: 'bold' }}>三个方向</Text>
+      <Box style={{ flexDirection: 'column', gap: 7 }}>
+        <Box style={{ background: '#F7F9FC', padding: 8, borderLeft: '3px solid #0E3F8C', borderRadius: 3 }}>
+          <Text style={{ fontSize: 12, color: '#1A2230', fontWeight: 'bold' }}>将完整配方迁移到 ×3 与 ×4</Text>
+          <Text style={{ fontSize: 12.5, color: '#4A5568' }}>目前完整配方仅在 ×2 上验证；×3 与上限相差约 3 dB</Text>
+        </Box>
+        <Box style={{ background: '#F7F9FC', padding: 8, borderLeft: '3px solid #0E3F8C', borderRadius: 3 }}>
+          <Text style={{ fontSize: 12, color: '#1A2230', fontWeight: 'bold' }}>将评价指标扩展到感知质量</Text>
+          <Text style={{ fontSize: 12.5, color: '#4A5568' }}>补充 LPIPS / FID；但感知质量受训练数据规模限制，需先扩充数据</Text>
+        </Box>
+        <Box style={{ background: '#F7F9FC', padding: 8, borderLeft: '3px solid #FFC107', borderRadius: 3 }}>
+          <Text style={{ fontSize: 12, color: '#1A2230', fontWeight: 'bold' }}>补齐同协议基线</Text>
+          <Text style={{ fontSize: 12.5, color: '#4A5568' }}>官方架构阶梯 8 臂已训完 7 臂，SRFormer 训练中；引用论文数字不进入主表</Text>
+        </Box>
+      </Box>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 62, left: 70, right: 70, padding: 14, background: '#F0F5FC', borderLeft: '5px solid #0E3F8C', borderRadius: 4 }}>
+    <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>主要结论：在真实配对数据上，×2 尺度的保真度已接近其实测上限，性能差异主要来自模型结构与损失设计，而非模型容量。</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 24, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 12 }}>
+    <Text style={{ fontSize: 12.5, color: '#8B97A8' }}>RealSR 真实图像超分 · 课程项目汇报</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>13 / 13</Text>
+  </Box>
+</Slide>

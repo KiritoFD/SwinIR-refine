@@ -1,0 +1,77 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 34, left: 70, right: 70, flexDirection: 'column', gap: 6 }}>
+    <Text style={{ fontSize: 13, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>02 框架 · 我们对问题的判断</Text>
+    <Text style={{ fontSize: 30, color: '#0E3F8C', fontWeight: 'bold' }}>"把误差降到最小"的最优解，会主动把细节抹平</Text>
+    <Text style={{ fontSize: 14, color: '#4A5568' }}>这是损失函数本身造成的，不是模型能力不够</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 122, left: 70, right: 70, height: 76, background: '#0E3F8C', borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 20, padding: 14 }}>
+    <Math latex='\hat{y}^{\star}(x) \;=\; \arg\min_{\hat{y}}\, \mathbb{E}\big[\|\hat{y}-y\|_2^2\big] \;=\; \mathbb{E}[\,y \mid x\,]' width={700} display={true} color='#FFFFFF' />
+    <Text style={{ fontSize: 14, color: '#FFC107', fontWeight: 'bold' }}>最优输出 ＝ 条件均值</Text>
+  </Box>
+
+  {/* 左：推论 */}
+  <Box style={{ position: 'absolute', top: 214, left: 70, width: 620, height: 250, background: '#F7F9FC', border: '1px solid #D6DCE5', borderRadius: 4, padding: 16, flexDirection: 'column', gap: 10 }}>
+    <Text style={{ fontSize: 16, color: '#0E3F8C', fontWeight: 'bold' }}>推论：一步到位的两难</Text>
+    <Box style={{ flexDirection: 'column', gap: 8 }}>
+      <Box style={{ background: '#FFFFFF', padding: 10, borderLeft: '4px solid #0E3F8C', borderRadius: 3 }}>
+        <Text style={{ fontSize: 13, color: '#1A2230' }}>同一个低分辨率输入，可以对应多种高频细节（纹理的走向、边缘的锐度），它们在像素误差上同样合理。</Text>
+      </Box>
+      <Box style={{ background: '#FFFFFF', padding: 10, borderLeft: '4px solid #D9534F', borderRadius: 3 }}>
+        <Text style={{ fontSize: 13, color: '#1A2230' }}>最小化像素误差的解是这些可能性的<span style={{ fontWeight: 'bold', color: '#D9534F' }}>平均</span>，其结果是纹理对比度降低、边缘变钝。</Text>
+      </Box>
+      <Box style={{ background: '#FFF4E6', padding: 10, borderLeft: '4px solid #FFC107', borderRadius: 3 }}>
+        <Text style={{ fontSize: 13, color: '#1A2230' }}>即：<span style={{ fontWeight: 'bold' }}>过度平滑来自像素误差目标本身，而非训练不充分</span>。增大模型或延长训练都无法改变这一性质。</Text>
+      </Box>
+    </Box>
+  </Box>
+
+  {/* 右：两个对策 */}
+  <Box style={{ position: 'absolute', top: 214, right: 70, width: 460, flexDirection: 'column', gap: 12 }}>
+    <Box style={{ background: '#FFFFFF', border: '1px solid #D6DCE5', borderTop: '4px solid #0E3F8C', borderRadius: 4, padding: 14, flexDirection: 'column', gap: 6 }}>
+      <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>对策一 · 在频域上分别约束误差</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>用正交小波把图像分解为低频子带与三个方向的高频子带。正交变换保持能量守恒，因此可对高频子带单独加权，而不损失低频保真度。</Text>
+      <Text style={{ fontSize: 12, color: '#0E3F8C', fontWeight: 'bold' }}>代价：仅在训练时增加一项损失，推理无开销</Text>
+    </Box>
+
+    <Box style={{ background: '#FFFFFF', border: '1px solid #D6DCE5', borderTop: '4px solid #0E3F8C', borderRadius: 4, padding: 14, flexDirection: 'column', gap: 6 }}>
+      <Text style={{ fontSize: 15, color: '#0E3F8C', fontWeight: 'bold' }}>对策二 · 消除子带对平移的敏感性</Text>
+      <Text style={{ fontSize: 12, color: '#1A2230' }}>离散小波不具平移不变性：同一纹理平移一个像素，子带系数即发生变化。对图像做多次循环平移，分别计算损失后取平均。</Text>
+      <Text style={{ fontSize: 12, color: '#0E3F8C', fontWeight: 'bold' }}>代价：仅在训练时增加计算，是复小波方案的低成本替代</Text>
+    </Box>
+  </Box>
+
+  {/* 演进条 */}
+  <Box style={{ position: 'absolute', top: 480, left: 70, right: 70, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+    <Box style={{ flex: 1, background: '#F7F9FC', padding: 10, borderRadius: 4, flexDirection: 'column', alignItems: 'center', border: '1px solid #D6DCE5' }}>
+      <Text style={{ fontSize: 22, color: '#4A5568', fontWeight: 'bold' }}>34.11</Text>
+      <Text style={{ fontSize: 12.5, color: '#4A5568' }}>基线</Text>
+    </Box>
+    <Text style={{ fontSize: 20, color: '#0E3F8C', fontWeight: 'bold' }}>→</Text>
+    <Box style={{ flex: 1, background: '#F7F9FC', padding: 10, borderRadius: 4, flexDirection: 'column', alignItems: 'center', border: '1px solid #D6DCE5' }}>
+      <Text style={{ fontSize: 22, color: '#0E3F8C', fontWeight: 'bold' }}>34.24</Text>
+      <Text style={{ fontSize: 12.5, color: '#4A5568' }}>+ 高频约束</Text>
+    </Box>
+    <Text style={{ fontSize: 20, color: '#0E3F8C', fontWeight: 'bold' }}>→</Text>
+    <Box style={{ flex: 1, background: '#F7F9FC', padding: 10, borderRadius: 4, flexDirection: 'column', alignItems: 'center', border: '1px solid #D6DCE5' }}>
+      <Text style={{ fontSize: 22, color: '#0E3F8C', fontWeight: 'bold' }}>34.31</Text>
+      <Text style={{ fontSize: 12.5, color: '#4A5568' }}>+ 平移平均</Text>
+    </Box>
+    <Text style={{ fontSize: 20, color: '#0E3F8C', fontWeight: 'bold' }}>→</Text>
+    <Box style={{ flex: 1, background: '#0E3F8C', padding: 10, borderRadius: 4, flexDirection: 'column', alignItems: 'center' }}>
+      <Text style={{ fontSize: 22, color: '#FFC107', fontWeight: 'bold' }}>34.41</Text>
+      <Text style={{ fontSize: 12.5, color: '#D9E6F7' }}>完整配方</Text>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 56, left: 70, right: 70, padding: 14, background: '#FFF4E6', borderLeft: '4px solid #FFC107', borderRadius: 4 }}>
+    <Text style={{ fontSize: 14, color: '#0E3F8C', fontWeight: 'bold' }}>对照实验：把高频拆成独立分支的网络（双路小波 U-Net）得 33.85 dB，低于仅增加损失项的 34.24 dB。显式拆分频带会损失跨频带信息，因此采用损失约束而非结构改动。</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 24, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 12 }}>
+    <Text style={{ fontSize: 12, color: '#8B97A8' }}>参考：Parseval 能量守恒 · 条件均值为 MSE 最优解</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>06 / 13</Text>
+  </Box>
+</Slide>

@@ -1,0 +1,35 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#334155' }} />
+
+  <Box style={{ position: 'absolute', top: 18, left: 70, right: 70, flexDirection: 'column', gap: 2 }}>
+    <Text style={{ fontSize: 13, color: '#475569', letterSpacing: 4, fontWeight: 'bold' }}>03 模型设计 · 整体结构</Text>
+    <Text style={{ fontSize: 27, color: '#1E293B', fontWeight: 'bold' }}>U 形主干 + 高频子带损失：结构负责保真，损失负责高频</Text>
+  </Box>
+
+  {/* 架构图 */}
+  <Box style={{ position: 'absolute', top: 78, left: 70, right: 70, height: 398, alignItems: 'center', justifyContent: 'center' }}>
+    <Image src="G:/RealSR/docs/slides_new/assets/arch.jpg" width={796} height={398} />
+  </Box>
+
+  {/* 左：λ 一句话；右：维度设计与 bicubic */}
+  <Box style={{ position: 'absolute', top: 484, left: 70, right: 70, height: 192, flexDirection: 'row', gap: 12 }}>
+
+    <Box style={{ flex: 1.15, background: '#FFF7ED', border: '1px solid #FED7AA', borderLeft: '5px solid #EA580C', borderRadius: 4, padding: 12, flexDirection: 'column', gap: 5 }}>
+      <Text style={{ fontSize: 14, color: '#9A3412', fontWeight: 'bold' }}>分频设计：把监督信号只压在高频子带上</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>一次 DWT 把预测与真值各分解成 2×2 四个子带：<b style={{ color: '#475569' }}>LL</b> 是低频，承载亮度与平滑结构；<b style={{ color: '#C2410C' }}>HL / LH / HH</b> 是三个方向的高频，承载边缘与纹理。超分真正要补的正是后者，故低频不参与监督，避免为锐度牺牲整体保真。</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>小波基<b>严格正交且局部</b>，这是该机制成立的关键：正交保证能量守恒，局部使约束作用在邻近区域。也正因此，此前全局的 FFT 频带增益头全线失败，而本机制有效。</Text>
+      <Text style={{ fontSize: 12.5, color: '#9A3412', lineHeight: 1.45 }}>图中 <b>λ 就是高频损失项的权重</b>（即 --dwt-weight），衡量为锐度让出多少保真。</Text>
+    </Box>
+
+    <Box style={{ flex: 1, background: '#FFFFFF', border: '1px solid #E2E8F0', borderLeft: '5px solid #334155', borderRadius: 4, padding: 12, flexDirection: 'column', gap: 5 }}>
+      <Text style={{ fontSize: 14, color: '#1E293B', fontWeight: 'bold' }}>维度设计：只降空间，不降信息；入口是双三次上采样</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>编码器把边长逐级减半 128²→64²→32²→16²，但<b>通道同步翻倍</b> 64→128→256→256，使 <b style={{ color: '#0F766E' }}>c·s 恒定</b>。空间被压缩，<b>可表达的方向数不减反增</b> —— 降采样不是丢信息，而是把算力换成更宽的表示，解码器再对称还原。</Text>
+      <Text style={{ fontSize: 12.5, color: '#1A2230', lineHeight: 1.5 }}>入口先用<b>双三次插值 ×2</b> 把 LR 抬到 HR(128²)，<b>整网都在此分辨率上运算</b>；配合<b>全局残差</b>，网络只学双三次与真值之差，零初始化输出头使 step 0 恰为双三次。</Text>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 14, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #E2E8F0', paddingTop: 8 }}>
+    <Text style={{ fontSize: 12.5, color: '#94A3B8' }}>高频损失为训练期开关，推理零额外开销；正交小波保能量守恒，加权高频不损失低频保真。配置 --dwt-weight 8 --dwt-levels 2 --dwt-shift 4，主干 18.7M 参数</Text>
+    <Text style={{ fontSize: 13, color: '#475569', fontWeight: 'bold' }}>07 / 13</Text>
+  </Box>
+</Slide>

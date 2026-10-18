@@ -1,0 +1,105 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 30, left: 70, right: 70, flexDirection: 'column', gap: 5 }}>
+    <Text style={{ fontSize: 13, color: '#1E4FA8', letterSpacing: 4, fontWeight: 'bold' }}>04 实验 · 表一 · 各组件增益</Text>
+    <Text style={{ fontSize: 29, color: '#0E3F8C', fontWeight: 'bold' }}>从基线到完整配方：逐项加入，四项指标同步评估</Text>
+    <Text style={{ fontSize: 13, color: '#4A5568' }}>100 对官方测试集 · Limited-range Y · 每行在上行基础上只增加一项</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 112, left: 70, right: 70, height: 418, background: '#F7F9FC', border: '1px solid #D6DCE5', borderRadius: 4, padding: 12, flexDirection: 'column' }}>
+    <Table
+      style={{ width: '100%', height: 394 }}
+      defaultTextStyle={{ fontSize: 12, textAlign: 'center', color: '#1A2230' }}
+      defaultCellStyle={{ border: { left: { width: 1, color: '#D6DCE5' }, right: { width: 1, color: '#D6DCE5' }, top: { width: 1, color: '#D6DCE5' }, bottom: { width: 1, color: '#D6DCE5' } }, padding: 6 }}
+      cells={[
+        [
+          { text: '配置', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'PSNR-Y', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'ΔPSNR', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'SSIM', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'MUSIQ', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: 'MANIQA', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '代价', textStyle: { bold: true, color: '#FFFFFF', fontSize: 12 }, cellStyle: { background: { color: '#0E3F8C' } } },
+        ],
+        [
+          { text: '① 主干下采样 → 不下采样（stride-2 → stride-1）', textStyle: { textAlign: 'left', fontSize: 12, bold: true } },
+          { text: '34.11', textStyle: { bold: true, fontSize: 13 } },
+          { text: '+0.38', textStyle: { bold: true, color: '#0E3F8C', fontSize: 13 } },
+          { text: '0.9246', textStyle: { fontSize: 12 } },
+          { text: '55.22', textStyle: { fontSize: 12 } },
+          { text: '0.3416', textStyle: { fontSize: 12 } },
+          { text: '参数减少 3.7 倍', textStyle: { fontSize: 12.5, color: '#0E3F8C' } },
+        ],
+        [
+          { text: '② ＋ 高频子带约束（λ=8，Haar 小波）', textStyle: { textAlign: 'left', fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '34.28', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '+0.17', textStyle: { color: '#0E3F8C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.9271', textStyle: {}, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '55.87', textStyle: {}, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.3513', textStyle: {}, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '无推理开销', textStyle: { fontSize: 12.5, color: '#0E3F8C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: '③ ＋ 正交化优化器（Muon，lr 5e-3）', textStyle: { textAlign: 'left', fontSize: 12 } },
+          { text: '34.29', textStyle: { fontSize: 12 } },
+          { text: '+0.01', textStyle: { color: '#0E3F8C' } },
+          { text: '0.9280', textStyle: {} },
+          { text: '55.85', textStyle: {} },
+          { text: '0.3521', textStyle: {} },
+          { text: '无推理开销', textStyle: { fontSize: 12.5, color: '#0E3F8C' } },
+        ],
+        [
+          { text: '④ ＋ 多相位平移集成（shift4）', textStyle: { textAlign: 'left', fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '34.31', textStyle: { fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '+0.02', textStyle: { color: '#0E3F8C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.9277', textStyle: {}, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '56.02', textStyle: { bold: true, color: '#0E3F8C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.3534', textStyle: { bold: true, color: '#0E3F8C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '无推理开销', textStyle: { fontSize: 12.5, color: '#0E3F8C' }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+        [
+          { text: '⑤ ＋ 8 重变换自集成（D4-TTA）', textStyle: { textAlign: 'left', fontSize: 12, bold: true }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '34.41', textStyle: { bold: true, color: '#FFC107', fontSize: 14 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '+0.10', textStyle: { bold: true, color: '#FFC107', fontSize: 13 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '0.9285', textStyle: { bold: true, color: '#FFC107', fontSize: 13 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '55.96', textStyle: { bold: true, color: '#FFC107', fontSize: 13 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '0.3534', textStyle: { bold: true, color: '#FFC107', fontSize: 13 }, cellStyle: { background: { color: '#0E3F8C' } } },
+          { text: '推理时间 ×8', textStyle: { fontSize: 12.5, color: '#FFC107' }, cellStyle: { background: { color: '#0E3F8C' } } },
+        ],
+        [
+          { text: '对照：参数量 18.7M → 72.5M（放大 3.9 倍）', textStyle: { textAlign: 'left', fontSize: 12 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '34.16', textStyle: { fontSize: 12, color: '#D9534F' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '+0.05', textStyle: { bold: true, color: '#D9534F', fontSize: 13 }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '0.9249', textStyle: { color: '#D9534F' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '55.42', textStyle: { color: '#D9534F' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '0.3434', textStyle: { color: '#D9534F' }, cellStyle: { background: { color: '#FFF4E6' } } },
+          { text: '线性增长 · 已饱和', textStyle: { fontSize: 12.5, color: '#D9534F' }, cellStyle: { background: { color: '#FFF4E6' } } },
+        ],
+        [
+          { text: '对照：5M → 10.7M（容量区间）', textStyle: { textAlign: 'left', fontSize: 12 }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '33.94–34.01', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '≈0', textStyle: { color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.9219–0.9232', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '54.20–54.84', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '0.3335–0.3391', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+          { text: '无差别', textStyle: { fontSize: 12.5, color: '#8B97A8' }, cellStyle: { background: { color: '#FFFFFF' } } },
+        ],
+      ]}
+    />
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 56, left: 70, right: 70, flexDirection: 'row', gap: 14 }}>
+    <Box style={{ flex: 2, background: '#F0F5FC', padding: 12, borderLeft: '4px solid #0E3F8C', borderRadius: 4 }}>
+      <Text style={{ fontSize: 13, color: '#0E3F8C', fontWeight: 'bold' }}>结论：①②④ 三项不增加推理开销，合计 +0.57 dB；其中 ① 单项即占 0.38 dB。参数量从 5M 放大到 72.5M 只换来 0.05 dB，说明该任务的瓶颈不在模型容量。</Text>
+    </Box>
+    <Box style={{ flex: 1, background: '#FFFFFF', padding: 12, border: '1px solid #D6DCE5', borderLeft: '4px solid #FFC107', borderRadius: 4 }}>
+      <Text style={{ fontSize: 13, color: '#1A2230', fontWeight: 'bold' }}>TTA 会小幅平滑极锐纹理：MUSIQ 55.96 略低于 ④ 的 56.02，而 SSIM 与 PSNR 上升。</Text>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 24, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 12 }}>
+    <Text style={{ fontSize: 12.5, color: '#8B97A8' }}>②③④ 为同优化器下的单因子对照；感知指标逐图存在 0.1–0.3 抖动，仅采纳多指标同向的变化</Text>
+    <Text style={{ fontSize: 12, color: '#4A5568', fontWeight: 'bold' }}>11 / 13</Text>
+  </Box>
+</Slide>

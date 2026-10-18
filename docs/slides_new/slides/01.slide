@@ -1,0 +1,39 @@
+<Slide style={{ width: '1280px', height: '720px', padding: 0, background: '#FFFFFF' }}>
+  <Box style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 10, background: '#0E3F8C' }} />
+
+  <Box style={{ position: 'absolute', top: 90, left: 70, right: 70, flexDirection: 'column', gap: 14 }}>
+    <Text style={{ fontSize: 14, color: '#1E4FA8', letterSpacing: 6, fontWeight: 'bold' }}>REAL IMAGE SUPER-RESOLUTION ×2</Text>
+    <Text style={{ fontSize: 44, color: '#0E3F8C', fontWeight: 'bold', lineHeight: 1.15 }}>真实配对数据上的超分：<br />性能上限的测量与模型设计</Text>
+    <Box style={{ width: 90, height: 5, background: '#FFC107' }} />
+    <Text style={{ fontSize: 17, color: '#1A2230' }}>报告内容：问题定义 · 技术路线综述 · 误差上限分析 · 模型与损失设计 · 同协议全指标对比</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 380, left: 70, right: 70, flexDirection: 'row', gap: 16 }}>
+    <Box style={{ flex: 1, background: '#0E3F8C', padding: 18, borderRadius: 4, flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+      <Text style={{ fontSize: 46, color: '#FFC107', fontWeight: 'bold' }}>34.41</Text>
+      <Text style={{ fontSize: 13, color: '#D9E6F7' }}>PSNR-Y (dB)</Text>
+    </Box>
+    <Box style={{ flex: 1, background: '#0E3F8C', padding: 18, borderRadius: 4, flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+      <Text style={{ fontSize: 46, color: '#FFC107', fontWeight: 'bold' }}>0.9285</Text>
+      <Text style={{ fontSize: 13, color: '#D9E6F7' }}>SSIM</Text>
+    </Box>
+    <Box style={{ flex: 1, background: '#0E3F8C', padding: 18, borderRadius: 4, flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+      <Text style={{ fontSize: 46, color: '#FFC107', fontWeight: 'bold' }}>55.96</Text>
+      <Text style={{ fontSize: 13, color: '#D9E6F7' }}>MUSIQ</Text>
+    </Box>
+    <Box style={{ flex: 1, background: '#0E3F8C', padding: 18, borderRadius: 4, flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+      <Text style={{ fontSize: 46, color: '#FFC107', fontWeight: 'bold' }}>0.3534</Text>
+      <Text style={{ fontSize: 13, color: '#D9E6F7' }}>MANIQA</Text>
+    </Box>
+  </Box>
+
+  <Box style={{ position: 'absolute', top: 540, left: 70, right: 70, flexDirection: 'column', gap: 8 }}>
+    <Text style={{ fontSize: 15, color: '#1A2230' }}>18.7M 参数 · 零预训练 · 全部指标在官方协议下统一评测</Text>
+    <Text style={{ fontSize: 15, color: '#1A2230' }}>上限由免训练的信号分析方法测出：<span style={{ color: '#0E3F8C', fontWeight: 'bold' }}>×2 的可达区间为 34.4–35.7 dB</span>，本文结果落在该区间内</Text>
+  </Box>
+
+  <Box style={{ position: 'absolute', bottom: 40, left: 70, right: 70, flexDirection: 'row', justifyContent: 'space-between', borderTop: '1px solid #D6DCE5', paddingTop: 14 }}>
+    <Text style={{ fontSize: 13, color: '#8B97A8' }}>RealSR V3 · 100 对官方测试集 · Limited-range Y · uint8 · 不裁剪边界</Text>
+    <Text style={{ fontSize: 13, color: '#4A5568', fontWeight: 'bold' }}>01 / 13</Text>
+  </Box>
+</Slide>
