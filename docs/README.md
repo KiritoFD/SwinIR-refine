@@ -1,35 +1,58 @@
-# Documentation map
+# 文档地图
 
-One-page index of every document in this repo. Start at the root `README.md` (the
-paper-style report); everything below it is deeper detail.
+**只看一份的话：** 根目录 [`../README.md`](../README.md)（历史脉络 + 方法 + 对比 + 复现）。
+**只要数字的话：** [`results/RESULT_LEDGER.md`](results/RESULT_LEDGER.md)（唯一底账）。
 
-## Reports (read in this order)
-| # | file | what it is |
+## 正式文档（结论以此为准）
+
+| # | 文件 | 管什么 |
 |---|---|---|
-| 1 | [`../README.md`](../README.md) | **Paper-style report** — headline results & baseline comparison tables, method, upper bound, reproduce, citations. |
-| 2 | [`../docs/baseline/README.md`](baseline/README.md) | **Baseline catalogue (2021–2026)** — every representative method, its numbers (source + protocol tag), and which we reproduced on the server. |
-| 3 | [`../exp/RELATED_WORK_AND_UPPER_BOUND.md`](../exp/RELATED_WORK_AND_UPPER_BOUND.md) | **Related work + the empirical PSNR/SSIM ceiling** — verified citations + our training-free three-wall measurement. |
-| 4 | [`../exp/FINAL_REPORT.md`](../exp/FINAL_REPORT.md) | **Full experiment chronicle** (2026-09-10 → 09-26): every run's hypothesis/config/result/verdict, appendices A–F (106-run master table, root inventory, per-run config ledger, audit findings, upper-bound probe). |
-| 5 | [`slides/slides.md`](slides/slides.md) | **Slidev 中文学术报告幻灯片（24 页）**：引言→相关工作→方法(KaTeX 数学)→实验（全方法×全指标密集大表 + 配图）。`cd slides && npm i && npm run dev/build/export`。 |
-| 6 | [`slides/slides-export.pptx`](slides/slides-export.pptx) / [`.pdf`](slides/slides-export.pdf) | 由 Slidev 导出的可分享成品（PPTX / PDF）。 |
+| 1 | [`../README.md`](../README.md) | 项目入口。六阶段历史脉络、四块方法积木、基线对比、物理上限、负面线路、协议、复现、结构、踩坑 |
+| 2 | [`results/RESULT_LEDGER.md`](results/RESULT_LEDGER.md) | **结果总账**。远程 48G 机 156 份 `eval.json` 的全部实测读数，按实验族分组 |
+| 3 | [`results/all_evals.csv`](results/all_evals.csv) | 同上，机器可读（`n` 列 = 评测对数，筛 `n==100` 得全量表） |
+| 4 | [`INFRA.md`](INFRA.md) | **算力总表**。MFU（统一 fwd+bwd 口径）、显存/batch/形状解析式、数据管线、评估耗时账、远程排程规则 |
+| 5 | [`baseline/README.md`](baseline/README.md) | 基线目录：我们用官方原码重训了哪些臂，读数与配方 |
+| 6 | [`baseline/SURVEY.md`](baseline/SURVEY.md) | 2021–2026 真实超分方法全景（>40 个），复现 vs 引用的取舍 |
+| 7 | [`../exp/FINAL_REPORT.md`](../exp/FINAL_REPORT.md) | 逐次实验编年史（106 次 run 的假设/配置/结论），附 A–F 附录 |
+| 8 | [`../exp/METRIC_SUITE_AND_DCP.md`](../exp/METRIC_SUITE_AND_DCP.md) | 八维评测体系 + WD-DCP 的完整推导与证明 |
+| 9 | [`../exp/DCP_RESULTS.md`](../exp/DCP_RESULTS.md) | DCP 步长/核参扫描专报 |
+| 10 | [`../exp/RELATED_WORK_AND_UPPER_BOUND.md`](../exp/RELATED_WORK_AND_UPPER_BOUND.md) | 相关工作引用 + 三墙上限的测量方法 |
 
-## Tooling & reproduction
-| file | purpose |
+## 汇报材料
+
+| 文件 | 说明 |
 |---|---|
-| `../diffusion/oracle.py` | training-free upper-bound probes (E_align / E_null / E_noise(MAD) / composite) — `python -m diffusion.oracle --scale 2\|3\|4` |
-| `../diffusion/baselines_sr.py` | classic SR baselines (EDSR / RCAN / SRResNet / RRDB) — `--backbone edsr\|rcan\|srresnet\|rrdb` |
-| `../scripts/server/run_baselines.sh`, `run_baselines2.sh` | reproduce the baselines on RealSR Train (A-strict protocol) |
-| `../scripts/server/run_*.sh` | every experiment campaign (tmux + per-arm GPU wait + idempotent `eval.json` skip) |
+| [`slides_new/`](slides_new/) | **现行 13 页汇报**（`RealSR_真实超分_论文汇报.pptx` / `.pdf`）。源文件是 `slides/NN.slide`（slidep DSL），`rebuild.py` 全量重建 |
+| [`slides_new/DESIGN.md`](slides_new/DESIGN.md) · [`STORY.md`](slides_new/STORY.md) | 设计约束与叙事结构 |
+| [`figs/`](figs/) | 论文级配图（results / ablation / ceiling / tradeoff） |
+| [`archive_slidev/`](archive_slidev/) | 旧版 Slidev 幻灯片（14 页，已被 `slides_new` 取代，留作历史） |
 
-## Stage notes (appendices to the chronicle)
-`exp/STAGE_SUMMARY.md` · `exp/PROGRESS_REPORT.md` · `exp/RESULTS_SUMMARY.md` ·
-`exp/WAVE_ARMS.md` · `exp/MAMBA_MATRIX_RESULTS.md` · `exp/NEW_ARMS.md` ·
-`exp/EVAL_PROTOCOL.md` · `exp/OFFICIAL_EVAL.md` · `exp/VERIFIED_SUMMARY.md`
+## 归档
 
-## Conventions
-- **Metrics**: PSNR-Y is secondary; **SSIM / MUSIQ / MANIQA** decide. ±0.05 dB / small
-  perceptual deltas = tie. Official `Test.m`: Limited-range Y, uint8, modcrop4, no shave, 100 pairs.
-- **Protocol tags**: A-strict (our paired protocol) · B-128/512 (diffusion-paper crop) ·
-  C-REdeg (Real-ESRGAN re-degraded) · D-blind (pretrained, synthetic-trained). Never compare across tags.
-- **Compute rule**: one b64 stride-1 arm saturates the 4090 → serial campaigns, no grad-ckpt,
-  drop batch when memory-bound.
+| 位置 | 内容 |
+|---|---|
+| [`../exp/archive/`](../exp/archive/README.md) | 27 份阶段文档（SwinIR / 扩散 / Mamba / 小波各期），带分类索引 |
+| [`results/logs/`](results/logs/) | 远程机器日志归档：58 份训练/评估日志 + 各臂 `args.json` |
+
+`exp/archive/` 里的文档**不作为结论来源**，但它们记录了失败时的判断，
+写论文的 related-work 和复盘时最有用。
+
+## 工具与复现
+
+| 文件 | 用途 |
+|---|---|
+| [`results/collect_evals.py`](results/collect_evals.py) | 从 `.tmp_remote/` 重新生成 `all_evals.csv` |
+| `bench_mfu.py` / `bench_mfu2.py` / `bench_mamba.py` | MFU 实测（fwd+bwd, `FlopCounterMode`）/ Mamba 双后端 |
+| [`../diffusion/oracle.py`](../diffusion/oracle.py) | 免训练上限探测：`python -m diffusion.oracle --scale 2\|3\|4` |
+| [`../diffusion/bench.py`](../diffusion/bench.py) | 单臂 ms/step、峰值显存（排计划前先跑） |
+| [`../scripts/server/`](../scripts/server/) | 全部训练/评测流水线（tmux + 每臂 GPU 等待 + 幂等 `eval.json` 跳过） |
+| [`../scripts/test_wd_dcp.py`](../scripts/test_wd_dcp.py) | WD-DCP 高频零损伤单测 |
+
+## 约定
+
+- **指标**：±0.05 dB、感知指标小幅波动 = 平手。SSIM / MUSIQ / MANIQA 与 PSNR 同权。
+- **协议**：A-strict（100 对 / limited-range Y / uint8 / modcrop4 / shave 0 / tile 64 pad 16）。
+  标签 B-128-512 / C-REdeg / D-blind 的数字**不得进 A-strict 表**。
+- **参数量**：只认 `sum(p.numel() for p in net.parameters())`，不数 `state_dict`。
+- **MFU**：只认 fwd+bwd 口径，见 `INFRA.md`。
+- **一臂一卡**：一个 b64 stride-1 臂就能占满 4090，所有 campaign 串行。
