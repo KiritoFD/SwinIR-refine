@@ -70,19 +70,120 @@ def to_u8(t: torch.Tensor) -> np.ndarray:
     return (t.clamp(0, 1) * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
 
 
-def data_consistency_project(hr: torch.Tensor, lr: torch.Tensor, iters: int, eta: float) -> torch.Tensor:
-    """Innovation #2 (range/null idea, training-free): project the SR onto the
-    LR-consistent set by back-projection  hr <- hr - eta * A^T(A hr - lr)  with A a
-    bicubic downsample. Keeps the regression range-space fidelity and nudges the null-
-    space residual toward what the LR actually supports (a cheap stand-in for the
-    diffusion data-consistency step)."""
-    if iters <= 0:
+def _parse_sigmas(val) -> tuple[float, float, float]:
+    """Parse sigma into (sigma_r, sigma_g, sigma_b).
+    Accepts float, int, tuple/list of 1 to 3 items, or comma-separated string."""
+    if isinstance(val, (int, float)):
+        s = float(val)
+        return (s, s, s)
+    if isinstance(val, str):
+        val = val.strip()
+        if not val:
+            return (0.0, 0.0, 0.0)
+        parts = [float(x.strip()) for x in val.split(",") if x.strip()]
+        if len(parts) == 1:
+            return (parts[0], parts[0], parts[0])
+        elif len(parts) == 2:
+            return (parts[0], parts[0], parts[1])
+        elif len(parts) >= 3:
+            return (parts[0], parts[1], parts[2])
+    if isinstance(val, (list, tuple)):
+        if len(val) == 1:
+            s = float(val[0])
+            return (s, s, s)
+        elif len(val) == 2:
+            return (float(val[0]), float(val[0]), float(val[1]))
+        elif len(val) >= 3:
+            return (float(val[0]), float(val[1]), float(val[2]))
+    return (0.0, 0.0, 0.0)
+
+
+def _build_psf_kernel(sigmas: tuple[float, float, float], device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, int] | None:
+    """Builds a per-channel (3, 1, ksize, ksize) Gaussian PSF kernel for grouped convolution."""
+    if max(sigmas) <= 0.0:
+        return None
+    max_s = max(sigmas)
+    ksize = max(int(round(max_s * 4)) | 1, 3)
+    coords = torch.arange(ksize, device=device, dtype=dtype) - (ksize - 1) / 2.0
+    kernels = []
+    for s in sigmas:
+        if s <= 0.0:
+            k = torch.zeros(ksize, ksize, device=device, dtype=dtype)
+            k[ksize // 2, ksize // 2] = 1.0
+        else:
+            g = torch.exp(-(coords ** 2) / (2.0 * s ** 2))
+            k = g[:, None] * g[None, :]
+            k = k / k.sum()
+        kernels.append(k.view(1, 1, ksize, ksize))
+    return torch.cat(kernels, dim=0), ksize // 2
+
+
+def _gaussian_kernel2d(ksize: int, sigma: float, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    """Creates a normalized 2D Gaussian kernel."""
+    coords = torch.arange(ksize, device=device, dtype=dtype) - (ksize - 1) / 2.0
+    g = torch.exp(-(coords ** 2) / (2.0 * sigma ** 2))
+    k = g[:, None] * g[None, :]
+    return (k / k.sum()).view(1, 1, ksize, ksize)
+
+
+def data_consistency_project(hr: torch.Tensor, lr: torch.Tensor, iters: int, eta: float,
+                             hf_decay: float = 0.0, sigma=0.0) -> torch.Tensor:
+    """Wavelet-Decoupled Optical Consistency Projection (WD-DCP).
+
+    Projects the predicted SR onto the LR-consistent affine manifold:
+        hr <- hr - delta
+    where delta = eta * A^T(A(hr) - lr).
+    To avoid smoothing away fine high-frequency details learned by the network,
+    delta is decomposed via Haar DWT:
+        [LL, HL, LH, HH] = DWT(delta)
+    and high-frequency subbands [HL, LH, HH] are scaled by `hf_decay` (default 0.0,
+    meaning only the low-frequency DC bias / registration mismatch is projected).
+    When sigma > 0, an optical Gaussian PSF is convolved before downsampling.
+    Supports per-channel chromatic-aberration sigma (tuple or comma-separated string).
+    """
+    if iters <= 0 or eta <= 0:
         return hr
+    from .wavelet import haar_dwt2, haar_iwt2
+
+    sigmas = _parse_sigmas(sigma)
     out = hr
+    device = hr.device
+    dtype = hr.dtype
+    kernel_info = _build_psf_kernel(sigmas, device, dtype)
+
     for _ in range(iters):
-        est_lr = F.interpolate(out, size=lr.shape[-2:], mode="bicubic", align_corners=False)
+        # 1. Forward degradation operator A
+        if kernel_info is not None:
+            kernel, pad_k = kernel_info
+            blurred = F.conv2d(F.pad(out, (pad_k, pad_k, pad_k, pad_k), mode="replicate"), kernel, groups=3)
+            est_lr = F.interpolate(blurred, size=lr.shape[-2:], mode="bicubic", align_corners=False)
+        else:
+            est_lr = F.interpolate(out, size=lr.shape[-2:], mode="bicubic", align_corners=False)
+
+        # 2. LR residual
         resid = est_lr - lr
-        out = (out - eta * F.interpolate(resid, size=hr.shape[-2:], mode="bicubic", align_corners=False)).clamp(0, 1)
+
+        # 3. Adjoint back-projection A^T
+        delta = eta * F.interpolate(resid, size=hr.shape[-2:], mode="bicubic", align_corners=False)
+
+        # 4. Wavelet-decoupled high-frequency protection
+        if hf_decay < 1.0:
+            H, W = delta.shape[-2:]
+            ph = H % 2
+            pw = W % 2
+            delta_p = F.pad(delta, (0, pw, 0, ph), mode="replicate") if (ph or pw) else delta
+            w = haar_dwt2(delta_p)
+            C = delta_p.shape[1]
+            if hf_decay <= 0.0:
+                w[:, C:] = 0.0
+            else:
+                w[:, C:] = w[:, C:] * hf_decay
+            delta_filt = haar_iwt2(w)
+            if ph or pw:
+                delta_filt = delta_filt[:, :, :H, :W]
+            delta = delta_filt
+
+        out = (out - delta).clamp(0, 1)
     return out
 
 
@@ -108,10 +209,10 @@ def _tta_inv(y: np.ndarray, k: int, f: int) -> np.ndarray:
     return np.ascontiguousarray(np.rot90(y, -k))
 
 
-def sr_tta(base, lr_u8: np.ndarray, scale: int) -> np.ndarray:
+def sr_tta(base, lr_u8: np.ndarray, scale: int, **kwargs) -> np.ndarray:
     acc = None
     for k, f in _D4:
-        inv = _tta_inv(base(_tta_fwd(lr_u8, k, f), scale), k, f)
+        inv = _tta_inv(base(_tta_fwd(lr_u8, k, f), scale, **kwargs), k, f)
         acc = inv.astype(np.float32) if acc is None else acc + inv.astype(np.float32)
     return np.clip(np.rint(acc / len(_D4)), 0, 255).astype(np.uint8)
 
@@ -236,7 +337,8 @@ def sr_latent_tiled(model, vae, vinfo, lr_u8, scale, steps, tile, pad, device, o
 
 @torch.no_grad()
 def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, objective, seed,
-                   tile_batch=8, bf16=False, hf_head=None, hf_steps=4, hf_scale=1.0, dcp=0, dcp_eta=0.2):
+                   tile_batch=8, bf16=False, hf_head=None, hf_steps=4, hf_scale=1.0,
+                   dcp=0, dcp_eta=0.2, dcp_decay=0.0, dcp_sigma=0.0, cam=None):
     h, w = lr_u8.shape[:2]
     hr_h, hr_w = h * scale, w * scale
     # a U-Net with in_stride/out_scale needs tiles aligned to 2^(levels+1);
@@ -283,9 +385,32 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
             if coord_map is not None:
                 cw = torch.cat([coord_map[:, :, y0:y1, x0:x1] for (y0, x0, y1, x1) in chunk], dim=0)
                 cond = torch.cat([rgb, cw], dim=1)
+            optics_tensor = None
+            if getattr(model, "optical_cond", False):
+                import math
+                cam_str = str(cam or "").lower()
+                is_canon = 1.0 if "canon" in cam_str else 0.0
+                is_nikon = 1.0 if "nikon" in cam_str else 0.0
+                opt_rows = []
+                for (y0, x0, y1, x1) in chunk:
+                    cy = (y0 + y1) / 2.0
+                    cx = (x0 + x1) / 2.0
+                    vy = cy / max(hr_h / 2.0, 1.0) - 1.0
+                    ux = cx / max(hr_w / 2.0, 1.0) - 1.0
+                    r_fov = math.sqrt(vy**2 + ux**2)
+                    cos_theta = ux / (r_fov + 1e-6)
+                    sin_theta = vy / (r_fov + 1e-6)
+                    opt_rows.append([r_fov, cos_theta, sin_theta, is_canon, is_nikon])
+                optics_tensor = torch.tensor(opt_rows, device=device, dtype=torch.float32)
             with _amp(device, bf16):
                 if objective == "reg":
-                    rec = rgb + model(cond, t0.expand(cond.shape[0]))
+                    # NOTE the name: this function's accumulator is called `out`, so the
+                    # model result must not be named `out` (that shadowing turned the
+                    # accumulator into a tile-sized tensor and made every later slice empty).
+                    mdl = model(cond, t0.expand(cond.shape[0]), optics=optics_tensor) if optics_tensor is not None else model(cond, t0.expand(cond.shape[0]))
+                    # honour --residual for reg too: VDSR/SRCNN-style nets predict the image
+                    # themselves (and add bicubic internally), so adding it again cost ~9 dB.
+                    rec = (rgb + mdl) if residual else mdl
                 else:
                     z = sample_flow(
                         model,
@@ -309,17 +434,75 @@ def sr_pixel_tiled(model, lr_u8, scale, steps, tile, pad, residual, device, obje
         out = hf_refine(hf_head, out, steps=hf_steps, device=device, seed=seed, scale=hf_scale)
     final = out[0, :, :hr_h, :hr_w]
     if dcp:
-        final = data_consistency_project(final.unsqueeze(0), lr_t, dcp, dcp_eta).squeeze(0)
+        final = data_consistency_project(final.unsqueeze(0), lr_t, dcp, dcp_eta,
+                                         hf_decay=dcp_decay, sigma=dcp_sigma).squeeze(0)
+    return to_u8(final)
+
+
+@torch.no_grad()
+def sr_lr_tiled(model, lr_u8, scale, tile, pad, device, tile_batch=8, bf16=False,
+                dcp=0, dcp_eta=0.2, dcp_decay=0.0, dcp_sigma=0.0):
+    """Tiling for POST-UPSAMPLING nets (the official EDSR / RCAN / SwinIR / HAT arms).
+
+    Those take the LR crop and upsample internally, so windows are cut in **LR** space and
+    each tile comes back at scale x its LR extent. `tile` keeps its usual meaning (HR core
+    / scale == the LR patch the net was trained on); `pad` stays an HR-space margin, which
+    is why it is integer-divided by `scale` here.
+    """
+    h, w = lr_u8.shape[:2]
+    hr_h, hr_w = h * scale, w * scale
+    # Window-attention nets (SwinIR w=8, HAT w=16) reshape each tile into
+    # (h/win, win, w/win, win) blocks, so every tile extent - including the clamped
+    # last one at the image border - must be a multiple of that window. Convolving nets
+    # only need align=1. Using align alone here silently produced 72-px edge tiles
+    # (64 core + 8 pad) that crash HAT and would have been wrong for any window net.
+    align = max(int(getattr(model, "align", 1) or 1), int(getattr(model, "win", 0) or 1))
+    Hl = h + (align - h % align) % align
+    Wl = w + (align - w % align) % align
+    lr_t = to_tensor(lr_u8).unsqueeze(0).to(device)
+    if Hl != h or Wl != w:
+        lr_t = F.pad(lr_t, (0, Wl - w, 0, Hl - h), mode="replicate")
+    pad_in = max(int(pad) // scale, 0)
+    pad_in = ((pad_in + align - 1) // align) * align          # round up to the window
+    core = max(int(tile) - int(tile) % align, align)
+    wins = _tile_windows(Hl, Wl, core, pad_in, align)
+    Hp, Wp = Hl * scale, Wl * scale
+    out = torch.zeros(1, 3, Hp, Wp, device=device)
+    acc = torch.zeros(1, 1, Hp, Wp, device=device)
+    pad_hr = pad_in * scale
+    t0 = torch.zeros(1, device=device)
+
+    by_shape: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
+    for win in wins:
+        by_shape.setdefault((win[2] - win[0], win[3] - win[1]), []).append(win)
+
+    for shape, group in by_shape.items():
+        for chunk in _chunked(group, max(1, tile_batch)):
+            x = torch.cat([lr_t[:, :, y0:y1, x0:x1] for (y0, x0, y1, x1) in chunk], dim=0)
+            with _amp(device, bf16):
+                rec = model(x, t0.expand(x.shape[0])).float().clamp(0, 1)
+            for i, (y0, x0, y1, x1) in enumerate(chunk):
+                _accumulate(out, acc, rec[i : i + 1], Hp, Wp, pad_hr, y0 * scale, x0 * scale)
+            del x, rec
+    out = out / acc.clamp(min=1e-6)
+    final = out[0, :, :hr_h, :hr_w]
+    if dcp:
+        final = data_consistency_project(final.unsqueeze(0), lr_t[:, :, :h, :w], dcp, dcp_eta,
+                                         hf_decay=dcp_decay, sigma=dcp_sigma).squeeze(0)
     return to_u8(final)
 
 
 def run_pairs(pairs, sr_fn, shave=0, oom_state=None, iqa=None):
-    """sr_fn(lr_u8, scale) -> uint8 SR. On OOM, halves tile_batch and retries once."""
+    """sr_fn(lr_u8, scale, cam=None) -> uint8 SR. On OOM, halves tile_batch and retries once."""
     rows = []
     for i, (lr_path, hr_path, sc) in enumerate(pairs):
+        p_str = str(lr_path).lower()
+        cam = "Canon" if "canon" in p_str else ("Nikon" if "nikon" in p_str else "")
         lr_u8 = load_rgb_u8(lr_path)
         hr_u8 = load_rgb_u8(hr_path)
         try:
+            sr = sr_fn(lr_u8, sc, cam=cam)
+        except TypeError:
             sr = sr_fn(lr_u8, sc)
         except RuntimeError as e:  # noqa: BLE001
             if "out of memory" in str(e).lower() and oom_state is not None and oom_state["tb"] > 1:
@@ -327,6 +510,8 @@ def run_pairs(pairs, sr_fn, shave=0, oom_state=None, iqa=None):
                 torch.cuda.empty_cache()
                 print(f"  OOM -> tile_batch={oom_state['tb']}", flush=True)
                 try:
+                    sr = sr_fn(lr_u8, sc, cam=cam)
+                except TypeError:
                     sr = sr_fn(lr_u8, sc)
                 except Exception as e2:  # noqa: BLE001
                     print(f"  FAIL {Path(lr_path).name}: {e2}", flush=True)
@@ -345,8 +530,8 @@ def run_pairs(pairs, sr_fn, shave=0, oom_state=None, iqa=None):
             b = b[shave:-shave, shave:-shave]
         m = official_pair_metrics(a, b)
         if iqa is not None:
-            # NR-IQA on the SR image only -- this is the half PSNR cannot see
-            m.update(iqa.score(a))
+            # Perceptual IQA: both FR (with GT b) and NR (on SR a)
+            m.update(iqa.score(a, b))
         m["name"] = Path(lr_path).name
         rows.append(m)
         extra = ""
@@ -416,6 +601,15 @@ def main():
                         "iterations applied to the SR before quantisation (hr <- hr - "
                         "eta*A^T(A hr - lr)); projects toward the LR-consistent set.")
     p.add_argument("--dcp-eta", type=float, default=0.2, help="DCP step size")
+    p.add_argument("--dcp-decay", type=float, default=0.0,
+                   help="Wavelet-decoupled HF decay factor: 0.0 = only project low-frequency LL "
+                        "band (preserves model HF texture), 1.0 = standard full-band DCP")
+    p.add_argument("--dcp-sigma", type=str, default="0.0",
+                   help="Optical Gaussian PSF kernel blur sigma (e.g. 0.6 or 0.65,0.60,0.55)")
+    p.add_argument("--dcp-sigma-canon", type=str, default="",
+                   help="Camera-specific PSF sigma for Canon (e.g. 0.65 or 0.70,0.65,0.60)")
+    p.add_argument("--dcp-sigma-nikon", type=str, default="",
+                   help="Camera-specific PSF sigma for Nikon (e.g. 0.50 or 0.55,0.50,0.45)")
     args = p.parse_args()
     if not getattr(args, "data_root", ""):
         args.data_root = default_root()
@@ -451,15 +645,31 @@ def main():
         return tuple(int(x) for x in parts) or tuple(int(x) for x in dflt.split(","))
 
     backbone = str(targs.get("backbone", "dit"))
+    net_input = str(targs.get("net_input", "hr"))
     use_coord = bool(targs.get("coord", False)) and mode == "pixel"
     if use_coord and objective == "flow":
         raise SystemExit("this ckpt was trained with --coord, which is reg-only")
-    if backbone in ("edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn"):
+    from .baselines_official import OFFICIAL as _OFFICIAL
+    if backbone in _OFFICIAL:
+        from .baselines_official import build as _build_official
+        model = _build_official(backbone, scale=int(targs.get("scale", 2))).to(device)
+    elif backbone in ("edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn",
+                    "rlfn", "srformer", "hat"):
+        from .baselines_sr import (build_edsr, build_rcan, build_srresnet, build_rrdb,
+                                   build_srcnn, build_vdsr, build_rdn,
+                                   build_rlfN, build_srformer, build_hat)
         _bmap = {"edsr": build_edsr, "rcan": build_rcan, "srresnet": build_srresnet,
-                 "rrdb": build_rrdb, "srcnn": build_srcnn, "vdsr": build_vdsr, "rdn": build_rdn}
-        model = _bmap[backbone](size, input_size=input_size, in_channels=in_ch,
-                                nf=int(targs.get("base", 0) or 0) or None,
-                                scale=int(targs.get("scale", 2))).to(device)
+                 "rrdb": build_rrdb, "srcnn": build_srcnn, "vdsr": build_vdsr, "rdn": build_rdn,
+                 "rlfn": build_rlfN, "srformer": build_srformer, "hat": build_hat}
+        _bkw = dict(input_size=input_size, in_channels=in_ch, scale=int(targs.get("scale", 2)))
+        _base = int(targs.get("base", 0) or 0)
+        if backbone in ("srformer", "hat"):
+            if _base:
+                _bkw["dim"] = _base
+        else:
+            if _base:
+                _bkw["nf"] = _base
+        model = _bmap[backbone](size, **_bkw).to(device)
     elif backbone == "unet":
         # native_lr was -1 (auto) unless explicitly set; mirror train_pixel's rule
         ns = int(targs.get("native_lr", -1))
@@ -544,20 +754,39 @@ def main():
         print(f"  HF flow head: {args.hf_head} (steps={args.hf_steps} scale={args.hf_scale})", flush=True)
 
     def make_sr_fn(steps):
+        def _get_sigma(cam):
+            if cam:
+                c_low = str(cam).lower()
+                if "canon" in c_low and getattr(args, "dcp_sigma_canon", ""):
+                    return args.dcp_sigma_canon
+                if "nikon" in c_low and getattr(args, "dcp_sigma_nikon", ""):
+                    return args.dcp_sigma_nikon
+            return args.dcp_sigma
+
         if mode == "latent":
-            base = lambda lr_u8, sc: sr_latent_tiled(
+            base = lambda lr_u8, sc, **kw: sr_latent_tiled(
                 model, vae, vinfo, lr_u8, sc, steps, args.tile, args.pad, device, objective, args.seed,
                 tile_batch=oom_state["tb"], residual=residual, bf16=args.bf16,
             )
         else:
-            base = lambda lr_u8, sc: sr_pixel_tiled(
-                model, lr_u8, sc, steps, args.tile, args.pad, residual, device, objective, args.seed,
-                tile_batch=oom_state["tb"], bf16=args.bf16,
-                hf_head=hf_head, hf_steps=args.hf_steps, hf_scale=args.hf_scale,
-                dcp=args.dcp, dcp_eta=args.dcp_eta,
-            )
+            if net_input == "lr":
+                base = lambda lr_u8, sc, cam=None, **kw: sr_lr_tiled(
+                    model, lr_u8, sc, args.tile, args.pad, device,
+                    tile_batch=oom_state["tb"], bf16=args.bf16,
+                    dcp=args.dcp, dcp_eta=args.dcp_eta,
+                    dcp_decay=args.dcp_decay, dcp_sigma=_get_sigma(cam),
+                )
+            else:
+                base = lambda lr_u8, sc, cam=None, **kw: sr_pixel_tiled(
+                    model, lr_u8, sc, steps, args.tile, args.pad, residual, device, objective, args.seed,
+                    tile_batch=oom_state["tb"], bf16=args.bf16,
+                    hf_head=hf_head, hf_steps=args.hf_steps, hf_scale=args.hf_scale,
+                    dcp=args.dcp, dcp_eta=args.dcp_eta,
+                    dcp_decay=args.dcp_decay, dcp_sigma=_get_sigma(cam),
+                    cam=cam,
+                )
         if args.tta:
-            return lambda lr_u8, sc: sr_tta(base, lr_u8, sc)
+            return lambda lr_u8, sc, **kw: sr_tta(base, lr_u8, sc, **kw)
         return base
 
     sweep = []
@@ -586,6 +815,8 @@ def main():
         "steps": args.steps,
         "tile": args.tile,
         "pad": args.pad,
+        "net_input": net_input,
+        "backbone": backbone,
         "tta": bool(args.tta),
         "seed": args.seed,
         "sweep": sweep,

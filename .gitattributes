@@ -1,0 +1,9 @@
+# Shell scripts are pushed to Linux and run there; a CRLF makes bash fail with
+# "syntax error near unexpected token". Force LF in the repo and in checkouts.
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.slide text eol=lf
+*.json text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf

@@ -53,10 +53,13 @@ def parse_args():
     p.add_argument("--data-root", default="", help="auto-detected if empty")
     p.add_argument("--out", default=r"G:\RealSR\experiments\diffusion\pixel_dit")
     p.add_argument("--objective", default="flow", choices=["flow", "reg"])
-    p.add_argument("--backbone", default="dit", choices=["dit", "unet", "mamba", "edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn"],
+    p.add_argument("--backbone", default="dit", choices=["dit", "unet", "mamba", "edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn", "rlfn", "srformer", "hat",
+                                                     "edsr_off", "rcan_off", "swinir_off", "hat_off", "vdsr_off", "rdn_off", "srformer_off"],
                    help="dit = token transformer; unet = conv encoder/decoder with skips; "
-                        "mamba = stride-1 VSS (2D selective scan), reg-only; edsr/rcan/srresnet/rrdb/" 
-                        "srcnn/vdsr/rdn = classic SR baselines (pre-upsampling residual variants of the canonical archs)")
+                        "mamba = stride-1 VSS (2D selective scan), reg-only; edsr/rcan/srresnet/rrdb/"
+                        "srcnn/vdsr/rdn/rlfn/srformer/hat = our pre-upsampling residual variants; "
+                        "*_off = the OFFICIAL architectures loaded from third_party/ (the papers' "
+                        "own configs, post-upsampling, needs --net-input lr)")
     p.add_argument("--size", default="S", choices=["XS", "S", "M", "B"])
     p.add_argument("--patch", type=int, default=2)
     # U-Net only (ignored by the DiT path)
@@ -200,6 +203,11 @@ def parse_args():
     p.add_argument("--amp", action="store_true")
     p.add_argument("--residual", type=int, default=1,
                    help="flow: model the residual (HR - bicubic_up) instead of HR")
+    p.add_argument("--net-input", default="hr", choices=["hr", "lr"],
+                   help="hr (default, our design): the net gets the bicubic-upsampled image and "
+                        "predicts a residual. lr: the net gets the raw LR crop and upsamples itself "
+                        "(post-upsampling) - required by the official EDSR/RCAN/SwinIR/HAT nets, "
+                        "whose sub-pixel head would otherwise double-upsample. reg objective only.")
     p.add_argument("--reg-loss", default="l1", choices=["l1", "l2", "smoothl1"])
     p.add_argument("--dwt-loss", action="store_true",
                    help="add an orthogonal Haar wavelet high-frequency subband L1 "
@@ -237,9 +245,47 @@ def parse_args():
                         "dataset augmentation. ~2x forward per step; inference unchanged.")
     p.add_argument("--equiv-weight", type=float, default=0.25,
                    help="alpha on the equivariance consistency term (proposal: 0.1-0.5)")
+    p.add_argument("--ll-swap", action="store_true",
+                   help="Physical Photometric-Invariant Supervision: reconstructs training target "
+                        "by replacing the HR LL wavelet subband with the LR-up LL subband. "
+                        "Eliminates aperture DC offset & white-balance drift penalty from L1.")
+    p.add_argument("--align-loss", action="store_true",
+                   help="Bounded Sub-Pixel Parallax-Tolerant Loss: searches within [-max_shift, max_shift]^2 "
+                        "for optimal sub-pixel grid alignment per patch before computing losses.")
+    p.add_argument("--align-max-shift", type=float, default=0.5,
+                   help="Max sub-pixel shift in pixels for bounded alignment (default: 0.5)")
+    p.add_argument("--optical-loss", action="store_true",
+                   help="Training-time Optical Cycle Loss: simulates optical Gaussian PSF + downsampling "
+                        "and enforces L1 consistency against raw LR input (internalizes WD-DCP).")
+    p.add_argument("--optical-weight", type=float, default=0.1,
+                   help="Weight for training-time optical cycle loss (default: 0.1)")
+    p.add_argument("--optical-sigma", type=float, default=0.6,
+                   help="Gaussian PSF sigma for training-time optical cycle loss (default: 0.6)")
+    p.add_argument("--ca-loss", action="store_true",
+                   help="Cross-Channel Gradient Collinearity Loss: penalizes misalignment between "
+                        "R/B gradients and G/luminance gradients to suppress chromatic aberration purple fringing.")
+    p.add_argument("--ca-weight", type=float, default=0.01,
+                   help="Weight for chromatic aberration collinearity loss (default: 0.01)")
+    p.add_argument("--optical-cond", action="store_true",
+                   help="Optical-Conditioned ResUNet: encodes continuous lens field polar coordinates "
+                        "[r_fov, cos_theta, sin_theta] and camera body ID [is_canon, is_nikon] into temb.")
+    p.add_argument("--ycbcr-loss", action="store_true",
+                   help="BT.601 YCbCr Weighted Loss: concentrates gradient energy on luminance Y "
+                        "aligned with official A-Strict evaluation while downweighting noisy chroma.")
+    p.add_argument("--ycbcr-y-weight", type=float, default=1.0,
+                   help="Luminance Y weight in YCbCr loss (default: 1.0)")
+    p.add_argument("--ycbcr-chroma-weight", type=float, default=0.2,
+                   help="Chroma Cb/Cr weight in YCbCr loss (default: 0.2)")
+    p.add_argument("--chroma-tv-weight", type=float, default=0.0,
+                   help="Total variation loss weight on chroma Cb/Cr to suppress sensor color mottling (default: 0.0)")
     p.add_argument("--eval-every", type=int, default=1000)
     p.add_argument("--eval-steps", type=int, default=20)
     p.add_argument("--val-pairs", type=int, default=16)
+    p.add_argument("--val-crop", type=int, default=0,
+                   help="center-crop the val images to this LR size before forwarding (0 = full "
+                        "image). run_val is untiled, so a full 1000x1000 LR crop through a "
+                        "post-upsampling transformer (HAT-L / SwinIR) is a several-GB activation "
+                        "storm; a fixed crop also makes best-val selection identical across arms.")
     p.add_argument("--patience", type=int, default=8)
     p.add_argument("--min-steps", type=int, default=4000)
     p.add_argument("--val-eval-steps", type=int, default=8)
@@ -292,6 +338,11 @@ def parse_args():
         raise SystemExit("--adv-deg requires --pretrain-root (it replaces BSRGAN there)")
     if args.dwt_loss and args.objective != "reg":
         raise SystemExit("--dwt-loss is a reg objective term (needs --objective reg)")
+    if args.net_input == "lr":
+        if args.objective != "reg":
+            raise SystemExit("--net-input lr is a reg-only path (flow needs the HR-space condition)")
+        if args.coord or args.equiv or args.adv_deg:
+            raise SystemExit("--net-input lr does not combine with --coord/--equiv/--adv-deg")
     if args.equiv and (args.backbone != "unet" or args.objective != "reg"):
         raise SystemExit("--equiv requires --backbone unet --objective reg")
     if args.equiv and args.adv_deg:
@@ -300,7 +351,7 @@ def parse_args():
 
 
 @torch.no_grad()
-def run_val(net, val_ds, device, objective, steps, max_n, seed, residual):
+def run_val(net, val_ds, device, objective, steps, max_n, seed, residual, net_input="hr", val_crop=0):
     """True Y-PSNR on held-out pairs."""
     net.eval()
     ys, ss = [], []
@@ -311,12 +362,29 @@ def run_val(net, val_ds, device, objective, steps, max_n, seed, residual):
         b = val_ds[i]
         lr = b["lr"].unsqueeze(0).to(device)
         hr = b["hr"].unsqueeze(0).to(device)
+        if val_crop and val_crop > 0 and lr.shape[-1] > val_crop and lr.shape[-2] > val_crop:
+            # deterministic centre crop (same location for every arm -> comparable)
+            ch = min(int(val_crop), lr.shape[-2]); cw = min(int(val_crop), lr.shape[-1])
+            y0 = (lr.shape[-2] - ch) // 2; x0 = (lr.shape[-1] - cw) // 2
+            lr = lr[:, :, y0:y0 + ch, x0:x0 + cw]
+            hr = hr[:, :, y0 * (hr.shape[-2] // lr.shape[-2]):(y0 + ch) * (hr.shape[-2] // lr.shape[-2]),
+                        x0 * (hr.shape[-1] // lr.shape[-1]):(x0 + cw) * (hr.shape[-1] // lr.shape[-1])]
+        if net_input == "lr":
+            # post-upsampling net (official EDSR/RCAN/SwinIR/HAT): LR in, HR out
+            rec = net(lr, t0).clamp(0, 1)
+            sr_u8 = (rec[0] * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
+            hr_u8 = (hr[0] * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
+            m = official_pair_metrics(sr_u8, hr_u8)
+            ys.append(m["psnr_y"]); ss.append(m["ssim_y"])
+            continue
         lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
         inp = lr_up
         if coord_ch and b.get("coord") is not None:
             inp = torch.cat([lr_up, b["coord"].unsqueeze(0).float().to(device)], dim=1)
+        optics = b["optics"].unsqueeze(0).to(device) if getattr(net, "optical_cond", False) and b.get("optics") is not None else None
         if objective == "reg":
-            rec = (lr_up + net(inp, t0)).clamp(0, 1)
+            out = net(inp, t0, optics=optics) if optics is not None else net(inp, t0)
+            rec = ((lr_up + out) if residual else out).clamp(0, 1)
         else:
             z = sample_flow(net, lr_up.shape, cond=inp, steps=steps, solver="heun", device=device, seed=seed)
             rec = (z * 2.0 + lr_up).clamp(0, 1) if residual else z.clamp(0, 1)
@@ -403,7 +471,8 @@ def main():
     dm = args.decoded_manifest or None
     _real = RealSRCropDataset(args.data_root, "Test" if args.overfit_test else "Train",
                               ("Canon", "Nikon"), args.scale, args.lr_patch, True,
-                              cache=bool(args.cache_data), decoded_manifest=dm, coord=args.coord)
+                              cache=bool(args.cache_data), decoded_manifest=dm, coord=args.coord,
+                              optical_cond=args.optical_cond)
     if args.overfit_test:
         _real.augment = True  # random crops + flips so every step sees the whole frame
     adv = None
@@ -471,15 +540,43 @@ def main():
     is_flow = args.objective == "flow"
     in_ch = 6 if is_flow else 3
     kw = {"input_size": hr_px, "patch_size": args.patch, "in_channels": in_ch, "use_checkpoint": args.grad_ckpt}
-    if args.backbone in ("edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn"):
+    from .baselines_official import OFFICIAL as _OFFICIAL
+    if args.backbone in _OFFICIAL:
+        # OFFICIAL architecture loaded from third_party/: LR in, HR out (post-upsampling
+        # sub-pixel head), so --net-input lr is mandatory here rather than guessed at.
+        kw.pop("patch_size", None)
+        from .baselines_official import build as _build_official
+        model = _build_official(args.backbone, scale=int(args.scale)).to(device)
+        # Each official net declares the input space it was designed for: EDSR/RCAN/RDN/
+        # SwinIR/SRFormer/HAT upsample internally (LR in), VDSR refines a bicubic-upsampled
+        # image and predicts it directly (HR in, --residual 0). Guessing this silently cost
+        # ~9 dB in the tiling gate, so it is checked, not assumed.
+        want = getattr(model, "net_input", "lr")
+        if want != args.net_input:
+            raise SystemExit(f"--backbone {args.backbone} is a {want}-input net: pass --net-input {want}")
+        if want == "hr" and not args.residual:
+            pass                       # direct image prediction: correct for VDSR
+        if want == "hr" and args.residual:
+            raise SystemExit(f"--backbone {args.backbone} predicts the image itself: pass --residual 0")
+        nparam = sum(p.numel() for p in model.parameters()) / 1e6
+        print(f"  {model.official_name} scale={args.scale} align={model.align} "
+              f"net_input={want} params={nparam:.2f}M (OFFICIAL arch from third_party)",
+              flush=True)
+    elif args.backbone in ("edsr", "rcan", "srresnet", "rrdb", "srcnn", "vdsr", "rdn",
+                         "rlfn", "srformer", "hat"):
         kw.pop("patch_size", None)
         kw["scale"] = int(args.scale)
         if args.base:
             kw["nf"] = int(args.base)
         from .baselines_sr import (build_edsr, build_rcan, build_srresnet, build_rrdb,
-                                   build_srcnn, build_vdsr, build_rdn)
+                                   build_srcnn, build_vdsr, build_rdn,
+                                   build_rlfN, build_srformer, build_hat)
         _bmap = {"edsr": build_edsr, "rcan": build_rcan, "srresnet": build_srresnet,
-                 "rrdb": build_rrdb, "srcnn": build_srcnn, "vdsr": build_vdsr, "rdn": build_rdn}
+                 "rrdb": build_rrdb, "srcnn": build_srcnn, "vdsr": build_vdsr, "rdn": build_rdn,
+                 "rlfn": build_rlfN, "srformer": build_srformer, "hat": build_hat}
+        if args.backbone in ("srformer", "hat") and args.base:
+            kw["dim"] = int(args.base)   # transformer baselines take width via --base
+            kw.pop("nf", None)
         model = _bmap[args.backbone](args.size, **kw).to(device)
         nparam = sum(p.numel() for p in model.parameters()) / 1e6
         print(f"  {args.backbone.upper()} nf={model.head.out_channels if hasattr(model.head,'out_channels') else '-'} "
@@ -503,6 +600,7 @@ def main():
         kw["coord_channels"] = 2 if args.coord else 0
         kw["freq_route"] = bool(args.freq_route)
         kw["wavelet"] = bool(args.dwt_unet)
+        kw["optical_cond"] = bool(args.optical_cond)
         if args.dwt_dual:
             model = build_wavelet_dual(args.size, input_size=hr_px, in_channels=3,
                                        base=kw.get("base", 0), mult=kw["mult"],
@@ -546,16 +644,21 @@ def main():
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     _name = {"unet": "PixelUNet", "dit": "PixelDiT", "mamba": "MambaSR",
              "edsr": "EDSR", "rcan": "RCAN", "srresnet": "SRResNet", "rrdb": "RRDB",
-             "srcnn": "SRCNN", "vdsr": "VDSR", "rdn": "RDN"}.get(args.backbone, args.backbone.upper())
+             "srcnn": "SRCNN", "vdsr": "VDSR", "rdn": "RDN", "rlfn": "RLFN",
+             "srformer": "SRFormer", "hat": "HAT",
+             "edsr_off": "EDSR-official", "rcan_off": "RCAN-official",
+             "swinir_off": "SwinIR-official", "hat_off": "HAT-L-official"}.get(args.backbone, args.backbone.upper())
     print(
         f"{_name}-{args.size} {n_params:.2f}M  "
         f"backbone={args.backbone} objective={args.objective}  HR={hr_px} "
         f"in_ch={in_ch} residual={bool(args.residual)} train={len(ds)} val={0 if val_ds is None else len(val_ds)}",
         flush=True,
     )
-    if args.dwt_loss or args.equiv:
-        print(f"  new-arms: dwt_loss={bool(args.dwt_loss)}(w={args.dwt_weight},"
-              f"levels={args.dwt_levels}) equiv={bool(args.equiv)}(w={args.equiv_weight})",
+    if args.dwt_loss or args.equiv or args.ll_swap or args.align_loss or args.optical_loss or args.ca_loss:
+        print(f"  physics-arms: ll_swap={bool(args.ll_swap)} align={bool(args.align_loss)}(max={args.align_max_shift}) "
+              f"optical={bool(args.optical_loss)}(w={args.optical_weight},s={args.optical_sigma}) "
+              f"ca={bool(args.ca_loss)}(w={args.ca_weight}) "
+              f"dwt={bool(args.dwt_loss)}(w={args.dwt_weight},lv={args.dwt_levels}) equiv={bool(args.equiv)}",
               flush=True)
 
     if args.lora_r > 0:
@@ -644,30 +747,56 @@ def main():
     _perc: dict = {}   # lazy holder for the pyiqa LPIPS loss module (see forward_loss)
     _nr: dict = {}     # lazy holder for the pyiqa no-reference IQA metric used as a loss
 
-    def forward_loss(inp, lr_up, hr):
+    def forward_loss(inp, lr_up, hr, optics=None):
         if is_flow:
             x0 = (hr - lr_up).clamp(-1, 1) * 0.5 if args.residual else hr
             return flow_loss(model, x0, inp, t_mode=args.t_sampler)[0], None
-        res = model(inp, t_zeros.expand(lr_up.shape[0]))
-        pred = (lr_up + res).clamp(0, 1)
-        if args.reg_loss == "l2":
-            base = F.mse_loss(pred, hr)
-        elif args.reg_loss == "smoothl1":
-            base = F.smooth_l1_loss(pred, hr)
+        res = model(inp, t_zeros.expand(inp.shape[0]), optics=optics)
+        if args.net_input == "lr":
+            pred = res.clamp(0, 1)                     # official post-upsampling net
         else:
-            base = F.l1_loss(pred, hr)
+            # --residual is honoured for reg as well (VDSR / SRCNN predict the image
+            # themselves at HR size); silently adding bicubic to them cost ~9 dB.
+            pred = ((lr_up + res) if args.residual else res).clamp(0, 1)
+        target_hr = hr
+        if getattr(args, "ll_swap", False):
+            from .physics_loss import ll_swap_target
+            target_hr = ll_swap_target(lr_up, target_hr)
+        if getattr(args, "align_loss", False):
+            from .physics_loss import bounded_align_target
+            target_hr = bounded_align_target(pred, target_hr, max_shift=args.align_max_shift)
+
+        if getattr(args, "ycbcr_loss", False):
+            from .physics_loss import ycbcr_weighted_l1_loss
+            base = ycbcr_weighted_l1_loss(pred, target_hr, y_weight=args.ycbcr_y_weight, chroma_weight=args.ycbcr_chroma_weight)
+        elif args.reg_loss == "l2":
+            base = F.mse_loss(pred, target_hr)
+        elif args.reg_loss == "smoothl1":
+            base = F.smooth_l1_loss(pred, target_hr)
+        else:
+            base = F.l1_loss(pred, target_hr)
+        if getattr(args, "chroma_tv_weight", 0.0) > 0:
+            from .physics_loss import chroma_tv_loss
+            base = base + args.chroma_tv_weight * chroma_tv_loss(pred)
         if args.dwt_loss:
             lw = [float(x) for x in args.dwt_level_weights.split(",")] if args.dwt_level_weights else None
             if args.dwt_basis == "dtcwt":
-                base = base + args.dwt_weight * dtcwt_hf_loss(pred, hr, levels=args.dwt_levels)
+                base = base + args.dwt_weight * dtcwt_hf_loss(pred, target_hr, levels=args.dwt_levels)
             else:
                 common = dict(levels=args.dwt_levels, basis=args.dwt_basis,
                               band_w=(args.dwt_w_hl, args.dwt_w_lh, args.dwt_w_hh),
                               ll_w=args.dwt_w_ll, level_weights=lw)
                 if args.dwt_shift > 1:
-                    base = base + args.dwt_weight * dwt_hf_loss_shift(pred, hr, n_shift=args.dwt_shift, **common)
+                    base = base + args.dwt_weight * dwt_hf_loss_shift(pred, target_hr, n_shift=args.dwt_shift, **common)
                 else:
-                    base = base + args.dwt_weight * dwt_highfreq_loss(pred, hr, **common)
+                    base = base + args.dwt_weight * dwt_highfreq_loss(pred, target_hr, **common)
+        if getattr(args, "optical_loss", False) and args.optical_weight > 0:
+            from .physics_loss import optical_consistency_loss
+            raw_lr = F.interpolate(lr_up, scale_factor=1.0 / args.scale, mode="bicubic", align_corners=False)
+            base = base + args.optical_weight * optical_consistency_loss(pred, raw_lr, sigma=args.optical_sigma)
+        if getattr(args, "ca_loss", False) and args.ca_weight > 0:
+            from .physics_loss import chromatic_aberration_loss
+            base = base + args.ca_weight * chromatic_aberration_loss(pred)
         if args.lpips_weight > 0:
             if "m" not in _perc:
                 import pyiqa
@@ -712,6 +841,7 @@ def main():
             lr = batch["lr"].to(device, non_blocking=True)
             hr = batch["hr"].to(device, non_blocking=True)
         coord = batch["coord"].to(device, non_blocking=True) if args.coord else None
+        optics = batch["optics"].to(device, non_blocking=True) if "optics" in batch else None
         cur_lr = lr_at(step, base_lr, args.warmup, args.steps)
         for g in opt.param_groups:
             g["lr"] = cur_lr
@@ -755,15 +885,17 @@ def main():
 
         lr_up = F.interpolate(lr, size=hr.shape[-2:], mode="bicubic", align_corners=False).clamp(0, 1)
         inp = torch.cat([lr_up, coord], dim=1) if coord is not None else lr_up
+        if args.net_input == "lr":
+            inp = lr                                   # official nets upsample internally
         with torch.amp.autocast("cuda", enabled=args.amp, dtype=amp_dtype):
-            loss, pred1 = forward_loss(inp, lr_up, hr)
+            loss, pred1 = forward_loss(inp, lr_up, hr, optics=optics)
             if args.equiv:
                 # one D4 element per step; consistency |T(pred1) - pred2|.  Grads
                 # flow through both paths so the net is pushed toward exact
                 # equivariance.  A single fixed transform per step still spans the
                 # group across steps because the dataset already randomises D4.
                 kind = int(torch.randint(1, 6, (1,)).item())
-                res2 = model(_geo(inp, kind), t_zeros.expand(lr_up.shape[0]))
+                res2 = model(_geo(inp, kind), t_zeros.expand(lr_up.shape[0]), optics=optics)
                 pred2 = (lr_up + res2).clamp(0, 1)
                 loss = loss + args.equiv_weight * F.l1_loss(_geo(pred1, kind), pred2)
         if not torch.isfinite(loss):
@@ -820,7 +952,8 @@ def main():
             else:
                 psnr, ssim = run_val(
                     net, val_ds, device, args.objective, max(1, args.val_eval_steps),
-                    args.val_pairs, args.seed, bool(args.residual),
+                    args.val_pairs, args.seed, bool(args.residual), net_input=args.net_input,
+                    val_crop=args.val_crop,
                 )
             print(f"  VAL {step+1}: Y {psnr:.3f}/{ssim:.4f} n={min(len(val_ds), args.val_pairs)}", flush=True)
             with (out / "val_log.jsonl").open("a") as f:

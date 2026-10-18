@@ -115,12 +115,14 @@ class RealSRCropDataset(Dataset):
         cache: bool = False,
         decoded_manifest: str | None = None,
         coord: bool = False,
+        optical_cond: bool = False,
     ):
         from .decoded import DecodedStore
 
         self.scale = scale
         self.lr_patch = lr_patch
         self.coord = coord
+        self.optical_cond = optical_cond
         self.augment = augment and split.lower() == "train"
         self.pairs = build_index(root, cameras, split, scale)
         if not self.pairs:
@@ -221,6 +223,19 @@ class RealSRCropDataset(Dataset):
             if rot:
                 cm = np.rot90(cm, rot, axes=(1, 2))
             out["coord"] = torch.from_numpy(np.ascontiguousarray(cm))
+        if self.optical_cond:
+            ch, cw = hr.shape[:2]
+            cy = top * sc + ch / 2.0
+            cx = left * sc + cw / 2.0
+            vy = cy / max(hh / 2.0, 1.0) - 1.0
+            ux = cx / max(hw / 2.0, 1.0) - 1.0
+            r_fov = float(np.sqrt(vy**2 + ux**2))
+            cos_theta = float(ux / (r_fov + 1e-6))
+            sin_theta = float(vy / (r_fov + 1e-6))
+            p_low = str(lr_path).lower()
+            is_canon = 1.0 if "canon" in p_low else 0.0
+            is_nikon = 1.0 if "nikon" in p_low else 0.0
+            out["optics"] = torch.tensor([r_fov, cos_theta, sin_theta, is_canon, is_nikon], dtype=torch.float32)
         return out
 
 

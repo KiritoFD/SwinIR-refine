@@ -68,6 +68,31 @@ class TimestepEmbedding(nn.Module):
         return self.mlp(emb)
 
 
+class OpticalEmbedding(nn.Module):
+    """Encodes continuous lens field coordinates + camera body into optics embedding.
+
+    Inputs:
+      optics: (B, 5) tensor [r_fov, cos_theta, sin_theta, is_canon, is_nikon]
+    Outputs:
+      (B, dim) embedding vector passed to ResBlock via temb.
+    Zero-initialized at output so at step 0 the model behaves identically to baseline.
+    """
+
+    def __init__(self, dim: int, in_features: int = 5):
+        super().__init__()
+        hidden = max(dim // 2, 32)
+        self.mlp = nn.Sequential(
+            nn.Linear(in_features, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, dim),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, optics: torch.Tensor) -> torch.Tensor:
+        return self.mlp(optics.float())
+
+
 from .gated_ffn import SpatialGatedFFN
 from .wavelet import haar_dwt2, haar_iwt2
 
@@ -198,7 +223,6 @@ class ResBlock(nn.Module):
         self.smooth = SmoothBranch(cout) if freq_route else None
         nn.init.zeros_(self.conv2.weight)
         nn.init.zeros_(self.conv2.bias)
-        nn.init.zeros_(self.temb.weight)
         nn.init.zeros_(self.temb.bias)
 
     def forward(self, x: torch.Tensor, temb: torch.Tensor) -> torch.Tensor:
@@ -261,16 +285,19 @@ class UNet(nn.Module):
         coord_channels: int = 0,
         freq_route: bool = False,
         wavelet: bool = False,
+        optical_cond: bool = False,
         **_unused,
     ):
         super().__init__()
         self.input_size = input_size
         self.in_channels = in_channels
         self.coord_channels = int(coord_channels)
+        self.optical_cond = bool(optical_cond)
         # flow.py concats the condition as extra input channels and then slices
         # the output back to x0.shape[1]; mirror the DiT and emit in_channels.
         self.out_channels = out_channels or in_channels
         self.use_checkpoint = use_checkpoint
+        self.t_dim = int(t_dim)
         self.base = base
         self.mult = tuple(mult)
         self.in_stride = int(in_stride)
@@ -296,6 +323,8 @@ class UNet(nn.Module):
         self.align = self.in_stride * (2 ** (L - 1)) * self.out_scale
 
         self.t_embed = TimestepEmbedding(t_dim)
+        if self.optical_cond:
+            self.opt_embed = OpticalEmbedding(t_dim)
         # coord channels (absolute frame position, see dataset/train_pixel) are
         # concatenated after the RGB input.  Their stem weights are zero-init so
         # a coord model at step 0 is EXACTLY the no-coord model -- the position
@@ -372,8 +401,15 @@ class UNet(nn.Module):
                 x = blk(x)
         return x
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        temb = self.t_embed(t)
+    def forward(self, x: torch.Tensor, t: torch.Tensor | None = None, optics: torch.Tensor | None = None) -> torch.Tensor:
+        if optics is not None and hasattr(self, "opt_embed"):
+            temb = self.opt_embed(optics)
+        elif t is not None and t.ndim == 2 and t.shape[-1] == 5 and hasattr(self, "opt_embed"):
+            temb = self.opt_embed(t)
+        elif t is not None:
+            temb = self.t_embed(t)
+        else:
+            temb = torch.zeros(x.shape[0], getattr(self, "t_dim", 256), device=x.device, dtype=x.dtype)
 
         h = self.stem(x)
         skips = []

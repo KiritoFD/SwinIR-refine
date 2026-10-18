@@ -21,3 +21,13 @@ __pycache__/
 # worktrees / third-party extracts
 .worktrees/
 third_party/
+
+# local working copies pulled from the remote box
+.tmp_remote/
+.tmp_remote_logs/
+
+# unrelated nested repo (OS course lab PDF)
+OS-lab/
+
+# stray helper chat transcript
+916.md
