@@ -1,114 +1,77 @@
-# RealSR 项目长期记忆
+# RealSR / WaveSR 项目长期记忆
 
-## 硬件：RTX 4090 48G（`ds@10.222.120.101`，env `harness-qwen`）
+**唯一底账：`docs/results/RESULT_LEDGER.md`（156 份 eval.json）**；入口 `README.md`（六阶段脉络）；
+算力口径 `docs/INFRA.md`；逐次 run `exp/FINAL_REPORT.md`；被取代的 27 份阶段文档在 `exp/archive/`。
+本文件只记「不看文档就会踩坑」的东西。
 
-**选 batch 按吞吐，不按显存占用。** 这张卡超过 ~40G 后呈超线性变慢，把显存"占满"反而降吞吐：
+## 硬件与远程
 
-- latent-S：b=64 (23.8G, 132 smp/s) 优于 b=112 (41.0G, 125 smp/s)
-- latent-XS：b=96 (12.0G, 328 smp/s) 远优于 b=320 (39.5G, 210 smp/s)
-- pixel-S：b=28 (40.8G, 29.6 smp/s) 略优于 b=24 (35.1G, 28.0 smp/s)
-- pixel-XS：b=32 (15.7G, 62.7 smp/s) 优于 b=64 (31.2G, 56.0 smp/s)
+- RTX 4090 48G，`ds@10.222.120.101`，仓库在 **`~/realsr`**（不是 ~/RealSR），env `harness-qwen`，
+  远端 `python` 不在 PATH，要用 conda 绝对路径；`~/realsr` **不是 git 仓库**，结果靠 tar 取回。
+- 选 batch 按吞吐不按显存：超 ~40G 呈超线性变慢。latent-S b64 132smp/s > b112 125；
+  latent-XS b96 > b320；pixel-S b28 略 > b24；pixel-XS b32 > b64。
+- 加速只能上 `torch.compile`：latent-S 1.26×（值），pixel-S 1.05×（只省显存 40.8→20.7G）。
 
-未 compile 的小 DiT 约 30% MFU（~25-30 TFLOPS），属正常。要真正提速得上
-`torch.compile` / kernel fusion，不是调 batch。box 有 24 核，DataLoader 默认
-4 workers 偏少（pixel 臂给到 8-16）。
+## 达成的结论（背下来）
 
-## 环境
+- **交付**：stride-1 U-Net b64（18.67M）+ 预训练 + DWT λ8 + Muon 5e-3 + 移位 + WD-DCP + TTA
+  = **Y 34.4632 / SSIM 0.9284**；单次前向 34.3800；Scale-96(41.19M) 34.5419（只 +0.07）。
+- **杠杆排序**：stride-1/native-LR **+0.38** >> 小波+Muon+移位合计 +0.28 > 预训练 +0.09
+  > base64→96 +0.07 = WD-DCP +0.07 > TTA +0.06 >> 容量 18.7M→72.5M +0.05。
+- **地板**：bicubic 31.7335（旧 README 写 31.7312 是错的）；bicubic 过 VAE 往返 31.5971。
+- **感知与保真对立**：最高 MUSIQ/MANIQA 是**原始单次前向**（56.02/0.3534），
+  WD-DCP/TTA/大模型全都在拿感知换保真。
+- **架构优势是真的**：`unet_ctrl`（骨干 + 纯基线配方，无任何外挂）34.0339 已超 SwinIR-L 33.9707。
+- **容量饱和点 ~5M**，三次验证（U-Net b32/40/48、DiT、b128 72.5M、HAT-L 40.7M）。
+- **上限是配准墙 34.4–35.7**，不是噪声（49 dB）。
+- flow 全线否（pixel 26.79 / latent 28.36 / HF-flow 31.07 且 scale 增大单调崩）；Mamba 否（33.42）。
 
-- `HF_ENDPOINT=https://hf-mirror.com`（huggingface.co 不通）
-- 数据：Train 406 对，Test 100 对；3 个 VAE 的 latent 缓存已建在 `data/latents/<vae>/`
-- 本机 Python 有 torch 的是 `C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe`（只够 smoke）
+## 指标口径（错一次就白算）
 
-## 约定
+- 官方：limited-range Y（BT.601 16-235）、uint8、crop=0、shave=0、tile 64/pad 16、100 对均值。
+- **参数量只用 `sum(p.numel() for p in net.parameters())`**。数 state_dict 会把
+  `relative_position_index` 等 int64 buffer 算进去（SwinIR 14.41M→真值 11.75M，SRFormer 16.37M→10.40M）。
+- **MFU 只认 fwd+bwd 口径**；forward-only 系统低估 ~3×。U-Net b64 20.0%、b128 34.7%、DiT-S 30.8%。
+- baseline 阶梯各臂共享的是样本**上限** 1.28M，不是同等消耗（HAT-L 0.20M / SwinIR 1.06M），引用必须带注。
 
-- 服务器上改 `.sh` 后确认是 LF；Windows 侧用 Python `write_text` 会写出 CRLF，推上去会 `syntax error`
-- 正在运行的 `run_36h*.sh` **不要就地编辑**（bash 按字节偏移续读会执行乱码）
-- 官方指标：limited-range Y (BT.601 16-235)、uint8、crop=0、shave=0、100 对均值
-- 参考锚点 E11：ModSwinIR-base + Align-L1，4.05M，12k 步，**Y 33.47 / SSIM 0.9144**
-- **地板（100 对官方协议，必背）**：bicubic **31.7335**；bicubic 过一遍 VAE 往返
-  **31.5971**（= reg 臂零初始化时的输出，因为输出头零初始化）。任何 latent/flow 臂
-  如果低于 31.60，就等于「连什么都不做都不如」。
+## 排障（真踩过）
 
-## torch.compile 实测
+- **`pkill -f "<脚本名>"` 会自杀**（ssh 的 `bash -c` 命令行含该串）→ 用 `[c]hain_afte` 自排除。
+- **`tmux has-session -t NAME` 是前缀匹配**：`baserep` 匹配到 `baserep2` 自己 → 死锁。精确写 `-t '=baserep'`。
+- `start_36h.sh` 遇同名 session 打印提示并 `exit 0`；被 kill 的链路会留**死 session** 让后续阶段静默跳过。
+- 后台链路用 mkdir 原子锁启动器；单靠 pkill 会留 0 或 2 个实例（两个实例互相 kill-session）。
+- **改网络结构必须同步 eval 端构造**：scale96 有 2/4 段评估崩在 `Unexpected key(s): opt_embed.mlp.*`。
+- `model.align = in_stride × 2^(levels-1) × out_scale`（=32）；尺寸非 align 倍数要先 pad 再裁回（1000%32=8）。
+- `eval_official.py` 经 `| tee` 块缓冲，**别用 tail 判进度**，看进程 + nvidia-smi。
+- 评估成本：pixel flow 9–10 s/NFE/对（100 对 @NFE16 ≈ 4 h）；latent flow ~7 min；reg ~12 min。
+- Windows 写 `.sh` 必须 LF（`write_text` 会写 CRLF → 远端 syntax error）。git 已加 `.gitattributes` 强制。
+- 本机跑 torch 用 `C:\Users\xy\AppData\Local\Programs\Python\Python312\python.exe`（只够 smoke）。
+  `python` 里 `glob(os.path.join(ROOT,'a/**/b'))` 不递归，要用 `os.path.join(ROOT,'a','**','b')`。
+- 国内：`HF_ENDPOINT=https://hf-mirror.com`（huggingface.co 不通）。
 
-- latent-S b=64：0.485 → 0.384 s/step（**1.26×**），值得开
-- pixel-S b=28：0.947 → ~0.90 s/step（1.05×），几乎没加速，但**显存 40.8G → 20.7G 减半**
-- 结论：token 数多、MLP 重的臂（latent）吃 compile 收益；小 patch attention 的臂基本只省显存
+## 课程汇报 PPT（`docs/slides_new/`，13 页，slidep 驱动）
 
-## 排障
+页序 `["01","02","03","11","05","06","07","12","14","13","08","09","10"]`，**页序 ≠ 文件编号**：
+`11`=上限（第 4 页）、`12`=存算比（第 8 页）、`14`=infra MFU 大表（第 9 页）、`13`=Mamba 失败（第 10 页）、
+`08/09/10`=结论三页（11–13 页）。`04.slide`、`03_tmp.slide` 已删。
+流程：`Write slides/NN.slide` → `slidep lint` 必须 `ok:true` → `slidep upsert-dsl --page-index N-1`；
+定稿才跑全量 `rebuild.py`（30–130s，带 3 次重试 + `"failures":[]` 校验）。
+单页改动不要全量重建，用 upsert + PowerPoint COM 导 PNG 核对（`slidep screenshot` 本机不可用）。
 
-- **不要 `pkill -f "<脚本名>"`**：ssh 远端那条 `bash -c ...` 的命令行里就含这个串，
-  会把自己一起杀掉 → exit 255 + 空输出。用 `[c]hain_afte` 这类自排除模式。
-- `start_36h.sh` 遇到同名 tmux session 会打印提示并 `exit 0`（不是报错）。
-  被 kill 的链路常留下**死 session**，会让后续阶段静默跳过 —— 启动前先 `tmux kill-session`。
-- 想给 tmux 新 session 传变量，别指望 `ENV=x start_36h.sh`；直接写进
-  `tmux new-session -d -s X "export A=1 && bash ..."`。
-- 后台链路要用带锁的启动器（如 `start_chain2_once.sh` 的 mkdir 原子锁）。
-  单靠 `pkill` 清理极易留下 0 个或 2 个实例；两个实例会互相 `kill-session`。
+**坑①：横向分栏写死宽度，列宽总和 ≤ 1140px**（1280−70−70）。超了会溢出，且诊断被塞进同一 message
+尾部截断成 "and N more"。排查：逐行删后重跑 lint。中文按 1、西文按 0.55 估宽。
+**坑②：`<Table>` 不支持 `columnWidths`**（不报错但无效），列宽按内容分配且宽内容列权重高 →
+长文案列把数值列挤到折行。唯一手段是**压缩最宽列文案**：4 个指标别塞一格（拆 4 列、用短表头、
+靠金色字+深色底分组）、名称列只留名称+参数、表头能省则省、边距 70→56。
+**坑③：lint 报 `bottom+Npx` 指向 Table 时，改 Table 的 height 无效**（按行数撑最小高度），必须上移外层 top。
+**坑④：右栏卡片组溢出优先压内层 padding/gap/lineHeight**（比移外层 top 省事）。
+**坑⑤：副标题折成 2 行就报 bottom 溢出** → 压到一行（≤75 字符）或把进度信息挪进标题括号。
 
-## 当前最强：stride-1 U-Net b64（`--backbone unet --base 64 --mult 1,2,4,4 --native-lr 0`）
+其他硬约束：`Math` 必须 `latex=` + `width` + `display` 且**不能有子元素**（留 20–40px 余量）；
+inline `<svg>` 必须显式 width/height；`<Image>` 的 src 相对 PPTX 目录解析**必须绝对路径**；
+**emoji 渲染成方框**；写文件必须 `newline='\n'`。
+改页码的批量替换**必须用 `</Text>` 做锚点**（否则误改数据里的 `xx.09 / 10.xx`）。
 
-官方 100 对 **Y 34.1083 / SSIM 0.9246**，**零预训练**，纯 RealSR，18.67M 参数，batch 128，10000 步。
-
-| 参考 | 参数 | Y |
-|---|---|---|
-| **U-Net b64 stride1** | 18.67M | **34.108** |
-| U-Net b40 stride1 | 7.58M | 34.007 |
-| U-Net b32 stride1 | 4.99M | 33.945 |
-| DiT pixel_reg | 34.0M | 33.763 |
-| E11（ModSwinIR+Align） | 4.05M | 33.47 |
-| Stock SwinIR-largeish | ~10M | 32.97 |
-| bicubic 地板 | — | 31.73 |
-
-**容量拐点在 10M 以上**：4.99M→10.73M 完全平坦（33.94/34.01/33.99），18.67M 才 +0.10。
-
-**`--native-lr 0`（在 HR 尺度运算）是关键**：同为零预训练，stride-2 的 18.68M U-Net 只有
-33.56，而 stride-1 的 4.99M 就有 33.94。**在目标分辨率上运算比参数量重要得多。**
-代价是显存 ∝ base（b32 138 / b40 172 / b48 207 / b64 276 MB/样本）和硬件效率下降
-（C=32 时 GEMM 瘦，只跑到 4.4 TFLOPS vs 10.7）。
-
-**容量 5M~10.7M 之间无差别**（33.94/34.01/33.99）—— 容量不是瓶颈，这一点在 DiT 上也验证过。
-
-**预训练 batch 必须按尺寸调**：`PRE_BATCH` 固定 256 会让 b48/b64 直接 OOM。
-
-## 骨干：DiT vs U-Net（`diffusion/dit.py` / `diffusion/unet.py`）
-
-两者接口完全一致（`forward(x,t)`，x=(B,C,H,W)，t∈[0,1000]），`--backbone {dit,unet}` 切换。
-
-| 模型 | 参数 | batch | 显存 | samples/s @HR128 |
-|---|---|---|---|---|
-| DiT-S | 34.0M | 28 | 20.7G | 70 |
-| **U-Net base=64** | 18.7M | 390 | 21.7G | **940** |
-
-**U-Net 的 native-LR 是关键**（`in_stride=2, out_scale=2`）：stem 一个 stride-2 卷积降到
-LR 尺度，编码器/解码器全在 LR 尺度跑（skip 落在相同分辨率层上），最后 pixel-shuffle 抬回 HR。
-最高分辨率上只剩一个 stem 卷积和一个 shuffle 卷积 → 省 29% FLOPs、**显存降 4.5 倍**。
-⚠️ 只对 reg 有效；flow 的 ODE 状态在 HR 带白噪声，下采样会混叠掉速度场要重建的信息。
-
-`model.align = in_stride × 2^(levels-1) × out_scale`（=32）。eval 的 tile 必须按它对齐，
-且图片尺寸不是 align 整数倍时要先 pad 再裁回（RealSR 的 1000%32=8，不处理会 skip concat 崩）。
-
-**DiT-S 的算力去向**：HR128 → n=4096 tokens，**attention 的 n² 项占 64% 的 FLOPs**，
-整步 101 TFLOPS = 4090 峰值的 61%（真算力瓶颈）。但存算比已 1962 FLOP/byte
-远超 ridge point 165 → **提高存算比无收益**，真正的杠杆是减少全分辨率 attention。
-
-## 数据管线
-
-`data/decoded/`：4562 张图 / 31.23 GB 预解码 uint8 blob（`precache_hr.py`，21 秒建好）。
-`DecodedStore` 按**文件路径**索引，任何 dataset 直接 `store.get(path)`，零拷贝 memmap。
-- RealSR 10.95 ms/item（解码瓶颈已消除）
-- **BSRGAN 153 ms/item —— 瓶颈是退化本身（JPEG 往返），不是解码**；12 worker 只有 84 items/s，
-  而 batch 390 @0.42s 需要 929 samples/s。预训练前必须先解决这个。
-
-## 评估成本（排程前必算）
-
-像素空间 flow 的官方评估比 latent 贵一个数量级：实测 **9–10 s / NFE / 对**
-（1000×1400 图，tile 64 → HR core 128，约 342 tile/图，34M DiT）。
-- pixel flow 100 对 @NFE16 实测 **~4 h**（sweep 另计）；NFE64 ≈ 10.5 h，跑不起。
-  一次带 sweep(2,4,8,16,32)+官方 100 对 @NFE16 的完整评估实测 **5.2 h**
-- latent flow 100 对 @NFE40 只要 ~7 min（tile 256，8× 下采样，token 少 64 倍）
-- reg 臂 100 对 ~12 min（单遍）
-→ 像素 flow 只能报低 NFE 官方数 + 子集 NFE 饱和曲线。
-
-`eval_official.py` 经 `| tee` 时 stdout 块缓冲，日志几十分钟不刷新；
-**别用 tail 判进度**，看进程存活 + `nvidia-smi`。
+**用户语言规范**：零内部黑话、零比喻词（墙/地板/天花板/抹平）、零营销句式（先说清/换句话说）、
+不贴命令行、不要目录页与章节扉页、技术路线按综述口径（CNN→Transformer→GAN→扩散，各自优劣）、
+数据优先于叙述、**全篇字号 ≥ 12px**、负面结果可用幽默语气（如「Mamba Out!」）。
